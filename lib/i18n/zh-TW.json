@@ -492,5 +492,11 @@
   "Showing the emails one campaign collected.": "只顯示單一活動收集到的 Email。",
   "Show all": "顯示全部",
   "Say what the email will be used for and how to unsubscribe: the message they reply to is kept as their consent.": "記得說明 Email 的用途和如何退訂：對方回覆的這則訊息會被保存為同意紀錄。",
-  "A comment's first reply cannot carry it either, so it shows only when an opening DM or the follow step comes first.": "留言後的第一則私訊回覆也無法附上按鈕，所以只有在先傳開場私訊或追蹤確認時才會出現。"
+  "A comment's first reply cannot carry it either, so it shows only when an opening DM or the follow step comes first.": "留言後的第一則私訊回覆也無法附上按鈕，所以只有在先傳開場私訊或追蹤確認時才會出現。",
+  "Import all commenters": "匯入所有留言者",
+  "Importing…": "匯入中…",
+  "Import failed": "匯入失敗",
+  "Importing: {scanned} comments scanned, {created} new contacts (post {done}/{total})": "匯入中：已掃描 {scanned} 則留言，新增 {created} 位（第 {done}/{total} 篇）",
+  "Instagram is rate limiting: {scanned} comments scanned, {created} new contacts. Click again later to continue where it stopped.": "Instagram 暫時限流：已掃描 {scanned} 則留言，新增 {created} 位。稍後再按一次，會從中斷的地方繼續。",
+  "Import finished: {scanned} comments scanned, {created} new contacts.": "匯入完成：掃描 {scanned} 則留言，新增 {created} 位。"
 }

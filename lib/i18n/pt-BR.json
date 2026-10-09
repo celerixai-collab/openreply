@@ -492,5 +492,11 @@
   "Showing the emails one campaign collected.": "Mostrando os e-mails coletados por uma campanha.",
   "Show all": "Mostrar todos",
   "Say what the email will be used for and how to unsubscribe: the message they reply to is kept as their consent.": "Diga para que o e-mail será usado e como cancelar a inscrição: a mensagem respondida fica guardada como consentimento.",
-  "A comment's first reply cannot carry it either, so it shows only when an opening DM or the follow step comes first.": "A primeira resposta a um comentário também não pode levar o botão, então ele só aparece quando há uma DM de abertura ou a etapa de seguir antes."
+  "A comment's first reply cannot carry it either, so it shows only when an opening DM or the follow step comes first.": "A primeira resposta a um comentário também não pode levar o botão, então ele só aparece quando há uma DM de abertura ou a etapa de seguir antes.",
+  "Import all commenters": "Importar todos os comentaristas",
+  "Importing…": "Importando…",
+  "Import failed": "Falha na importação",
+  "Importing: {scanned} comments scanned, {created} new contacts (post {done}/{total})": "Importando: {scanned} comentários lidos, {created} novos contatos (post {done}/{total})",
+  "Instagram is rate limiting: {scanned} comments scanned, {created} new contacts. Click again later to continue where it stopped.": "O Instagram está limitando: {scanned} comentários lidos, {created} novos contatos. Clique novamente mais tarde para continuar de onde parou.",
+  "Import finished: {scanned} comments scanned, {created} new contacts.": "Importação concluída: {scanned} comentários lidos, {created} novos contatos."
 }

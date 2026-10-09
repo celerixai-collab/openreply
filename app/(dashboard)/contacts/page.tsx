@@ -72,6 +72,8 @@ function ContactsList() {
   const [page, setPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
 
   // Debounce typing so every keystroke is not a query.
   useEffect(() => {
@@ -105,7 +107,11 @@ function ContactsList() {
         const { totalPages } = data.data.pagination;
         // The last row of a later page was deleted: step back to the new
         // last page instead of showing an empty one.
-        if (data.data.contacts.length === 0 && totalPages >= 1 && page > totalPages) {
+        if (
+          data.data.contacts.length === 0 &&
+          totalPages >= 1 &&
+          page > totalPages
+        ) {
           steppedBack = true;
           setLoading(true);
           setPage(totalPages);
@@ -165,8 +171,13 @@ function ContactsList() {
       contact.email ??
       (contact.username ? `@${contact.username}` : t("this contact"));
     const question = contact.email
-      ? t("Delete {contact} from your contacts? Their email is removed and this cannot be undone.", { contact: who })
-      : t("Delete {contact} from your contacts? This cannot be undone.", { contact: who });
+      ? t(
+          "Delete {contact} from your contacts? Their email is removed and this cannot be undone.",
+          { contact: who },
+        )
+      : t("Delete {contact} from your contacts? This cannot be undone.", {
+          contact: who,
+        });
     if (!confirm(question)) return;
     setError(null);
     setDeletingId(contact.id);
@@ -186,6 +197,81 @@ function ContactsList() {
       setError(t("Failed to delete contact"));
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  // Pull everyone who commented on the account's posts from Instagram, in
+  // slices; a rate-limited run resumes from the saved cursor next time.
+  async function importAllCommenters() {
+    const key = "openreply:import-comments-cursor";
+    let cursor: unknown = null;
+    try {
+      cursor = JSON.parse(localStorage.getItem(key) ?? "null");
+    } catch {
+      cursor = null;
+    }
+    setImporting(true);
+    setError(null);
+    let scanned = 0;
+    let created = 0;
+    try {
+      for (;;) {
+        const res = await fetch("/api/contacts/import-comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cursor }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          setError(data.error ?? t("Import failed"));
+          break;
+        }
+        const r = data.data;
+        scanned += r.scannedComments;
+        created += r.created;
+        cursor = r.cursor;
+        try {
+          if (cursor) localStorage.setItem(key, JSON.stringify(cursor));
+          else localStorage.removeItem(key);
+        } catch {
+          // Storage blocked: a rate-limited run restarts from the top.
+        }
+        setImportStatus(
+          t(
+            "Importing: {scanned} comments scanned, {created} new contacts (post {done}/{total})",
+            {
+              scanned,
+              created,
+              done: r.mediaDone,
+              total: r.mediaTotal,
+            },
+          ),
+        );
+        if (r.rateLimited) {
+          setImportStatus(
+            t(
+              "Instagram is rate limiting: {scanned} comments scanned, {created} new contacts. Click again later to continue where it stopped.",
+              { scanned, created },
+            ),
+          );
+          break;
+        }
+        if (!cursor) {
+          setImportStatus(
+            t(
+              "Import finished: {scanned} comments scanned, {created} new contacts.",
+              { scanned, created },
+            ),
+          );
+          break;
+        }
+      }
+    } catch {
+      setError(t("Import failed"));
+    } finally {
+      setImporting(false);
+      setPage(1);
+      await fetchContacts();
     }
   }
 
@@ -220,23 +306,40 @@ function ContactsList() {
             : " "}
         </p>
         {canManage && (
-          <a
-            href={exportHref}
-            download
-            aria-disabled={!pagination || pagination.total === 0}
-            className={`rounded border border-border px-4 py-2 text-center text-sm font-medium text-muted hover:text-foreground ${
-              !pagination || pagination.total === 0
-                ? "pointer-events-none opacity-40"
-                : ""
-            }`}
-          >
-            {t("Export CSV")}
-          </a>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => void importAllCommenters()}
+              disabled={importing}
+              className="rounded border border-border px-4 py-2 text-center text-sm font-medium text-muted hover:text-foreground disabled:opacity-40"
+            >
+              {importing ? t("Importing…") : t("Import all commenters")}
+            </button>
+            <a
+              href={exportHref}
+              download
+              aria-disabled={!pagination || pagination.total === 0}
+              className={`rounded border border-border px-4 py-2 text-center text-sm font-medium text-muted hover:text-foreground ${
+                !pagination || pagination.total === 0
+                  ? "pointer-events-none opacity-40"
+                  : ""
+              }`}
+            >
+              {t("Export CSV")}
+            </a>
+          </div>
         )}
       </div>
+      {importStatus && (
+        <p className="text-sm text-muted" role="status">
+          {importStatus}
+        </p>
+      )}
 
       <p className="text-xs text-muted">
-        {t("Someone asks to be removed? Delete them here and unsubscribe them in your email tool too.")}
+        {t(
+          "Someone asks to be removed? Delete them here and unsubscribe them in your email tool too.",
+        )}
       </p>
 
       {campaign && (
@@ -289,9 +392,13 @@ function ContactsList() {
       {/* Empty state: nothing collected yet */}
       {!loading && contacts.length === 0 && !isFiltered && (
         <div className="panel rounded p-8 text-center sm:p-12">
-          <h3 className="mb-2 text-lg font-semibold">{t("No emails collected yet")}</h3>
+          <h3 className="mb-2 text-lg font-semibold">
+            {t("No emails collected yet")}
+          </h3>
           <p className="mx-auto mb-6 max-w-md text-sm text-muted">
-            {t("Turn on the Email gate in a campaign: open it, click Edit, and switch on “an email request before the link”. People then reply with their email to get the link, and every email shows up here.")}
+            {t(
+              "Turn on the Email gate in a campaign: open it, click Edit, and switch on “an email request before the link”. People then reply with their email to get the link, and every email shows up here.",
+            )}
           </p>
           <Link
             href="/campaigns"
@@ -309,11 +416,21 @@ function ContactsList() {
             <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b border-border text-left">
-                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">{t("Username")}</th>
-                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">{t("Email")}</th>
-                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">{t("Campaign")}</th>
-                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">{t("Captured")}</th>
-                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">{t("Source")}</th>
+                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">
+                    {t("Username")}
+                  </th>
+                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">
+                    {t("Email")}
+                  </th>
+                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">
+                    {t("Campaign")}
+                  </th>
+                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">
+                    {t("Captured")}
+                  </th>
+                  <th className="px-4 py-4 text-xs font-semibold text-muted uppercase tracking-wider sm:px-6">
+                    {t("Source")}
+                  </th>
                   <th className="px-4 py-4 sm:px-6" />
                 </tr>
               </thead>
@@ -328,20 +445,28 @@ function ContactsList() {
                   ))}
                 {!loading && contacts.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-muted sm:px-6">
+                    <td
+                      colSpan={6}
+                      className="px-4 py-12 text-center text-muted sm:px-6"
+                    >
                       {t("No contacts match your search.")}
                     </td>
                   </tr>
                 )}
                 {!loading &&
                   contacts.map((contact) => (
-                    <tr key={contact.id} className="hover:bg-surface-hover/50 transition-colors">
+                    <tr
+                      key={contact.id}
+                      className="hover:bg-surface-hover/50 transition-colors"
+                    >
                       <td className="px-4 py-4 sm:px-6">
                         <span className="block font-medium text-foreground">
                           {contact.username ? `@${contact.username}` : "—"}
                         </span>
                         {contact.name && (
-                          <span className="block text-xs text-foreground/80">{contact.name}</span>
+                          <span className="block text-xs text-foreground/80">
+                            {contact.name}
+                          </span>
                         )}
                         {contact.followsYou !== null && (
                           <span
@@ -351,17 +476,23 @@ function ContactsList() {
                                 : "bg-surface-hover text-muted"
                             }`}
                           >
-                            {contact.followsYou ? t("Follows you") : t("Not following")}
+                            {contact.followsYou
+                              ? t("Follows you")
+                              : t("Not following")}
                           </span>
                         )}
                         <span className="block text-xs text-muted">
-                          {t("via @{account}", { account: contact.instagramAccount.username })}
+                          {t("via @{account}", {
+                            account: contact.instagramAccount.username,
+                          })}
                         </span>
                       </td>
                       <td className="px-4 py-4 sm:px-6">
                         {contact.email ? (
                           <>
-                            <span className="select-all break-all text-foreground">{contact.email}</span>
+                            <span className="select-all break-all text-foreground">
+                              {contact.email}
+                            </span>
                             {contact.emailOptedOutAt && (
                               <span
                                 title={t("Asked by DM not to be emailed")}
@@ -389,12 +520,15 @@ function ContactsList() {
                       </td>
                       <td className="px-4 py-4 text-muted whitespace-nowrap sm:px-6">
                         {contact.emailCapturedAt
-                          ? new Date(contact.emailCapturedAt).toLocaleString(locale, {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
+                          ? new Date(contact.emailCapturedAt).toLocaleString(
+                              locale,
+                              {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              },
+                            )
                           : "—"}
                       </td>
                       <td className="px-4 py-4 text-muted sm:px-6">
@@ -427,7 +561,10 @@ function ContactsList() {
               <p className="text-xs text-muted">
                 {t("Showing {start}–{end} of {total}", {
                   start: (pagination.page - 1) * pagination.limit + 1,
-                  end: Math.min(pagination.page * pagination.limit, pagination.total),
+                  end: Math.min(
+                    pagination.page * pagination.limit,
+                    pagination.total,
+                  ),
                   total: pagination.total,
                 })}
               </p>
@@ -466,7 +603,13 @@ function ContactsList() {
 
 // The comment or DM behind the contact, cut to one line; the full text is in
 // the tooltip.
-function SourceText({ label, text }: { label: string | null; text: string | null }) {
+function SourceText({
+  label,
+  text,
+}: {
+  label: string | null;
+  text: string | null;
+}) {
   if (!text) return null;
   return (
     <span
