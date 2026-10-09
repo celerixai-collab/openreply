@@ -1,6 +1,10 @@
 "use client";
 
 import { useI18n } from "@/lib/i18n/provider";
+import {
+  DEFAULT_EMAIL_THANKS_MESSAGE,
+  defaultEmailPrompt,
+} from "@/lib/contacts/email-copy";
 
 
 /* eslint-disable @next/next/no-img-element */
@@ -40,12 +44,17 @@ interface CampaignPreviewProps {
   requireFollow: boolean;
   followPromptMessage: string;
   followPromptButtonLabel: string;
+  collectEmail?: boolean;
+  emailPromptMessage?: string;
+  emailThanksMessage?: string;
+  emailQuickReplyEnabled?: boolean;
   followUpEnabled: boolean;
   followUpMessage: string;
   followUpDelayMinutes?: number;
 }
 
 const SAMPLE_USER = "username";
+const SAMPLE_EMAIL = "name@gmail.com";
 
 /* ----------------------------- icons ----------------------------- */
 
@@ -323,6 +332,10 @@ function DmScreen({
   requireFollow,
   followPromptMessage,
   followPromptButtonLabel,
+  collectEmail = false,
+  emailPromptMessage = "",
+  emailThanksMessage = "",
+  emailQuickReplyEnabled = true,
   followUpEnabled,
   followUpMessage,
   followUpDelayMinutes = 0,
@@ -343,6 +356,10 @@ function DmScreen({
   requireFollow: boolean;
   followPromptMessage: string;
   followPromptButtonLabel: string;
+  collectEmail?: boolean;
+  emailPromptMessage?: string;
+  emailThanksMessage?: string;
+  emailQuickReplyEnabled?: boolean;
   followUpEnabled: boolean;
   followUpMessage: string;
   followUpDelayMinutes?: number;
@@ -350,6 +367,11 @@ function DmScreen({
   inboundMessage?: string;
 }) {
   const { t } = useI18n();
+  // With no opening DM and no follow step, a comment's ask goes out as the
+  // private reply, which cannot carry Instagram's one-tap email button.
+  const askIsPrivateReply =
+    inboundMessage === undefined && !openingDmEnabled && !requireFollow;
+  const showEmailButton = emailQuickReplyEnabled && !askIsPrivateReply;
   return (
     <div className="flex h-full flex-col text-white">
       <StatusBar />
@@ -363,7 +385,7 @@ function DmScreen({
         </span>
       </div>
 
-      <div className="flex-1 space-y-3 px-3 py-4">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
         {inboundMessage !== undefined && (
           <div className="flex justify-end">
             <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent px-3 py-2 text-sm">
@@ -406,6 +428,43 @@ function DmScreen({
             <div className="flex justify-end">
               <div className="rounded-2xl rounded-br-md bg-accent px-3 py-2 text-sm">
                 {followPromptButtonLabel || "i'm following"}
+              </div>
+            </div>
+          </>
+        )}
+        {collectEmail && (
+          <>
+            <div className="flex items-end gap-2">
+              <Avatar url={avatarUrl} size={24} />
+              <div className="max-w-[80%] rounded-2xl rounded-bl-md bg-zinc-800 px-3 py-2">
+                <p className="whitespace-pre-wrap text-sm">
+                  {(
+                    emailPromptMessage.trim() ||
+                    defaultEmailPrompt(showEmailButton)
+                  ).replace(/\{username\}/g, SAMPLE_USER)}
+                </p>
+              </div>
+            </div>
+            {showEmailButton && (
+              <div className="flex justify-end">
+                <span className="rounded-full border border-zinc-600 px-3 py-1 text-xs text-zinc-200">
+                  ✉️ {SAMPLE_EMAIL}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <div className="rounded-2xl rounded-br-md bg-accent px-3 py-2 text-sm">
+                {SAMPLE_EMAIL}
+              </div>
+            </div>
+            <div className="flex items-end gap-2">
+              <Avatar url={avatarUrl} size={24} />
+              <div className="max-w-[80%] rounded-2xl rounded-bl-md bg-zinc-800 px-3 py-2">
+                <p className="whitespace-pre-wrap text-sm">
+                  {(emailThanksMessage.trim() || DEFAULT_EMAIL_THANKS_MESSAGE)
+                    .replace(/\{username\}/g, SAMPLE_USER)
+                    .replace(/\{email\}/g, SAMPLE_EMAIL)}
+                </p>
               </div>
             </div>
           </>
@@ -531,6 +590,10 @@ export default function CampaignPreview(props: CampaignPreviewProps) {
             requireFollow={props.requireFollow}
             followPromptMessage={props.followPromptMessage}
             followPromptButtonLabel={props.followPromptButtonLabel}
+            collectEmail={props.collectEmail}
+            emailPromptMessage={props.emailPromptMessage}
+            emailThanksMessage={props.emailThanksMessage}
+            emailQuickReplyEnabled={props.emailQuickReplyEnabled}
             followUpEnabled={props.followUpEnabled}
             followUpMessage={props.followUpMessage}
             followUpDelayMinutes={props.followUpDelayMinutes}
@@ -553,6 +616,10 @@ export default function CampaignPreview(props: CampaignPreviewProps) {
             requireFollow={props.requireFollow}
             followPromptMessage={props.followPromptMessage}
             followPromptButtonLabel={props.followPromptButtonLabel}
+            collectEmail={props.collectEmail}
+            emailPromptMessage={props.emailPromptMessage}
+            emailThanksMessage={props.emailThanksMessage}
+            emailQuickReplyEnabled={props.emailQuickReplyEnabled}
             followUpEnabled={props.followUpEnabled}
             followUpMessage={props.followUpMessage}
             followUpDelayMinutes={props.followUpDelayMinutes}

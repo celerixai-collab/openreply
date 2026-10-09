@@ -13,6 +13,11 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import CampaignPreview, { type PreviewTab } from "@/components/campaign-preview";
+import {
+  DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_THANKS_MESSAGE,
+  defaultEmailPrompt,
+} from "@/lib/contacts/email-copy";
 
 interface Campaign {
   id: string;
@@ -32,6 +37,11 @@ interface Campaign {
   requireFollow: boolean;
   followPromptMessage: string | null;
   followPromptButtonLabel: string | null;
+  collectEmail: boolean;
+  emailPromptMessage: string | null;
+  emailInvalidMessage: string | null;
+  emailThanksMessage: string | null;
+  emailQuickReplyEnabled: boolean;
   followUpEnabled: boolean;
   followUpMessage: string | null;
   followUpDelayMinutes: number | null;
@@ -41,6 +51,7 @@ interface Campaign {
   isActive: boolean;
   instagramAccountId: string;
   instagramAccount: { username: string };
+  _count?: { capturedContacts: number };
   trackedLinks?: {
     destinationUrl: string;
     label?: string | null;
@@ -168,6 +179,10 @@ export default function CampaignDetailPage() {
     { label: t("CTR"), value: `${campaign.analytics.ctr}%` },
     { label: t("Failed"), value: campaign.analytics.failed },
   ];
+  const emailsCollected = campaign._count?.capturedContacts ?? 0;
+  if (campaign.collectEmail || emailsCollected > 0) {
+    metrics.push({ label: t("Emails collected"), value: emailsCollected });
+  }
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_1fr]">
@@ -192,6 +207,11 @@ export default function CampaignDetailPage() {
           >
             {campaign.isActive ? t("LIVE") : t("Paused")}
           </span>
+          {campaign.collectEmail && (
+            <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+              {t("Email gate")}
+            </span>
+          )}
         </div>
 
         <Summary title={t("When someone comments on")}>
@@ -246,6 +266,41 @@ export default function CampaignDetailPage() {
             <FieldBox>
               {campaign.followPromptButtonLabel || "i'm following"}
             </FieldBox>
+          </Summary>
+        )}
+
+        {campaign.collectEmail && (
+          <Summary title={t("They must leave an email first")}>
+            <FieldBox>
+              <span className="whitespace-pre-wrap">
+                {/* A comment's ask is the private reply, which cannot carry
+                    the one-tap button, unless an opening DM or the follow
+                    step comes first (the same rule as the preview). */}
+                {campaign.emailPromptMessage ||
+                  defaultEmailPrompt(
+                    campaign.emailQuickReplyEnabled &&
+                      (campaign.openingDmEnabled || campaign.requireFollow)
+                  )}
+              </span>
+            </FieldBox>
+            <FieldBox>
+              {campaign.emailInvalidMessage || DEFAULT_EMAIL_INVALID_MESSAGE}
+            </FieldBox>
+            <FieldBox>
+              {campaign.emailThanksMessage || DEFAULT_EMAIL_THANKS_MESSAGE}
+            </FieldBox>
+            <p className="text-xs text-muted">
+              {campaign.emailQuickReplyEnabled
+                ? t("One-tap email button: on")
+                : t("One-tap email button: off")}
+              {" · "}
+              <Link
+                href={`/contacts?campaign=${campaign.id}`}
+                className="hover:text-foreground hover:underline"
+              >
+                {t("{count} emails collected", { count: emailsCollected })}
+              </Link>
+            </p>
           </Summary>
         )}
 
@@ -370,6 +425,10 @@ export default function CampaignDetailPage() {
             followPromptButtonLabel={
               campaign.followPromptButtonLabel ?? "i'm following"
             }
+            collectEmail={campaign.collectEmail}
+            emailPromptMessage={campaign.emailPromptMessage ?? ""}
+            emailThanksMessage={campaign.emailThanksMessage ?? ""}
+            emailQuickReplyEnabled={campaign.emailQuickReplyEnabled}
             followUpEnabled={campaign.followUpEnabled ?? false}
             followUpMessage={campaign.followUpMessage ?? ""}
             followUpDelayMinutes={campaign.followUpDelayMinutes ?? 0}

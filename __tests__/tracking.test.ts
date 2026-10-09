@@ -10,6 +10,7 @@ import { hashRecipientId, parseRecipientToken } from "../lib/tracking/server";
 import {
   buildTrackedUrl,
   extractFirstUrl,
+  renderMessageWithoutLink,
   renderMessageWithTracking,
   replaceUrlWithTrackedPlaceholder,
 } from "../lib/tracking/message";
@@ -79,6 +80,41 @@ describe("tracked link messages", () => {
     expect(buildTrackedUrl("abc123", "https://manychat-alternative.com/")).toBe(
       "https://manychat-alternative.com/r/abc123"
     );
+  });
+});
+
+describe("{email} placeholder", () => {
+  it("fills in the email alongside {username}", () => {
+    expect(
+      renderMessageWithoutLink({
+        message: "收到 {email} ✅ 謝謝 {username}！",
+        commenterName: "leo.tw",
+        email: "leo@gmail.com",
+      })
+    ).toBe("收到 leo@gmail.com ✅ 謝謝 leo.tw！");
+    expect(
+      renderMessageWithTracking({
+        message: "{EMAIL}: {link}",
+        email: "leo@gmail.com",
+        trackedLinks: [{ slug: "abc123", destinationUrl: "https://example.com" }],
+        baseUrl: "https://openreply.example",
+      })
+    ).toBe("leo@gmail.com: https://openreply.example/r/abc123");
+  });
+
+  it("leaves {email} untouched when no email is passed, as before", () => {
+    expect(
+      renderMessageWithoutLink({ message: "Hi {username} {email}", commenterName: "leo" })
+    ).toBe("Hi leo {email}");
+    expect(
+      renderMessageWithTracking({ message: "Hi {email}", trackedLinks: [] })
+    ).toBe("Hi {email}");
+  });
+
+  it("renders an unknown email as empty rather than the raw token", () => {
+    expect(
+      renderMessageWithoutLink({ message: "email: {email}", email: null })
+    ).toBe("email:");
   });
 });
 

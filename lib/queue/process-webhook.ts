@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db/client';
 import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from '@/lib/queue/client';
-import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents } from '@/lib/meta/webhook';
+import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents, redactEmailsForStorage } from '@/lib/meta/webhook';
 import { Prisma, type InstagramProvider } from '@/app/generated/prisma/client';
 
 const OPENING_DM_READ_FALLBACK_DELAY_MS = 5 * 60 * 1000;
@@ -24,7 +24,8 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
         typeof payload === "object" && payload && "object" in payload
           ? String(payload.object)
           : null,
-      payload: payload as unknown as Prisma.InputJsonValue,
+      // Emails in DMs are not kept here; see redactEmailsForStorage.
+      payload: redactEmailsForStorage(payload) as unknown as Prisma.InputJsonValue,
       ...(workspaceId ? { workspaceId } : {}),
       status: "PENDING",
     },
@@ -108,6 +109,7 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
           messageId: event.messageId,
           messageText: event.messageText,
           senderId: event.senderId,
+          ...(event.fromQuickReply ? { fromQuickReply: true } : {}),
         },
         {
           // Message ids can contain characters BullMQ rejects in a job id (":"

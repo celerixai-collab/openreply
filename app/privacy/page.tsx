@@ -12,7 +12,7 @@ export default function PrivacyPage() {
     <LegalShell
       title="Privacy Policy"
       description="OpenReply helps businesses send Meta-compliant private replies when people comment on connected Instagram posts or reels."
-      updatedAt="May 24, 2026"
+      updatedAt="October 9, 2026"
     >
       <section>
         <h2 className="text-xl font-bold text-white">Data We Collect</h2>
@@ -22,6 +22,23 @@ export default function PrivacyPage() {
           Instagram access tokens, campaign settings, webhook payloads,
           comments needed to process campaigns, delivery logs, and operational
           diagnostics.
+        </p>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-bold text-white">Contacts And Emails</h2>
+        <p className="mt-3">
+          When a campaign uses the Email gate, people who comment on or message
+          the connected Instagram account are asked for their email before they
+          get the campaign&apos;s link. For each person a campaign answers we
+          store their Instagram-scoped id and username and, if they reply with
+          one, their email, when and how it was shared, and the exact message
+          they replied to as a record of consent. The business that runs the
+          campaign decides how those emails are used and is responsible for
+          them; OpenReply stores them only to run the campaign and to show and
+          export them to that business. Emails sent in direct messages are left
+          out of the webhook and delivery logs we keep. A contact is kept until the business deletes it, or
+          disconnects the Instagram account, which deletes all of its contacts.
         </p>
       </section>
 

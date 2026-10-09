@@ -52,6 +52,19 @@ import {
 } from "@/lib/tracking/message";
 import { TRACKED_LINK_ORDER } from "@/lib/tracking/link-order";
 import { hashRecipientId } from "@/lib/tracking/server";
+import { recordContactInteraction } from "@/lib/contacts/contacts";
+import { extractEmail } from "@/lib/utils/email";
+import {
+  buildEmailAsk,
+  emailGateSilencedFor,
+  emailStillNeeded,
+  handleEmailGateReply,
+  markEmailGateTrigger,
+  offersEmailQuickReply,
+  sendEmailGateMessage,
+  startEmailGate,
+  type LinkDelivery,
+} from "@/lib/contacts/email-gate";
 
 import { ZernioApiError } from "@/lib/zernio/client";
 
@@ -320,6 +333,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     orderBy: { createdAt: "asc" },
   });
 
+  let contactRecorded = false;
   for (const automation of automations) {
     // "Any word" campaigns fire on every comment; otherwise require a keyword hit.
     const matchResult = automation.matchAnyWord
@@ -365,6 +379,17 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       (alreadyPublicReplied || existingLog?.publicReplyDeliveryUnconfirmed || !automation.publicReplyEnabled)
     ) {
       continue;
+    }
+
+    // One commenter, one account per job: record them once. Never throws.
+    if (!contactRecorded) {
+      contactRecorded = true;
+      await recordContactInteraction({
+        workspaceId: automation.workspaceId,
+        instagramAccountId: automation.instagramAccountId,
+        igsid: commenterId,
+        username: commenterName,
+      });
     }
 
     if (!hasInstagramCredentials(automation.instagramAccount)) {
@@ -529,6 +554,10 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
+    // Email gate: read before anything is reserved, so a failed lookup has
+    // nothing to hand back.
+    const emailOwed = await emailStillNeeded(automation, commenterId);
+
     const usage = await reserveWorkspaceDMSend(automation.workspaceId);
     if (!usage.allowed) {
       await prisma.dmLog.update({
@@ -648,6 +677,15 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           : alreadyFollows !== true;
     }
 
+    // Email gate (after the opening DM and the follow gate): with neither in
+    // the way, the one private reply this comment allows is the email ask
+    // itself, and the person's typed reply opens the conversation for the
+    // link. Plain text: quick replies on a private reply are unverified.
+    const emailAsk =
+      emailOwed && !useOpeningDm && !sendFollowPrompt
+        ? buildEmailAsk(automation, commenterName, false)
+        : null;
+
     let claimed;
     try {
       claimed = await claimCommentDelivery(automation.id, commentId, "dm");
@@ -695,6 +733,21 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           buttonTitle: automation.followPromptButtonLabel || "i'm following",
           payload: `followcheck:${automation.id}`,
           postId: mediaId,
+        });
+      } else if (emailAsk) {
+        await startEmailGate({
+          automation,
+          igsid: commenterId,
+          username: commenterName,
+          prompt: emailAsk,
+          send: () =>
+            sendPrivateReply({
+              context: accessToken,
+              instagramAccountId: automation.instagramAccount.instagramId,
+              commentId: commentId,
+              message: emailAsk,
+              postId: mediaId,
+            }),
         });
       } else if (automation.trackedLinks.length > 0) {
         // Try button template first; if Meta rejects it, fall back to inline links.
@@ -877,6 +930,190 @@ async function sendFollowRecheckAck({
       "[DM Worker] Failed to send follow re-check acknowledgement:",
       formatError(error),
     );
+  }
+}
+
+type DeliverableAutomation = RevealAutomation & {
+  id: string;
+  workspaceId: string;
+  instagramAccountId: string;
+  followUpEnabled: boolean;
+  followUpMessage: string | null;
+  followUpDelayMinutes: number | null;
+};
+
+/**
+ * Deliver the reveal into an open conversation, once per operation id:
+ * reserve usage, send through the durable postback claim, schedule the
+ * follow-up and log it against `reveal:<userId>` (the key the read fallback
+ * checks). Shared by button taps and email-gate captures, so both count,
+ * dedupe and retry the same way.
+ *
+ * `beforeLink` runs once usage is reserved and just before the link goes
+ * out, so a message that announces the link (the email gate's thanks) is not
+ * sent when the monthly limit then blocks it. The result says what happened:
+ * only "sent" means this call delivered the link.
+ */
+async function deliverReveal({
+  automation,
+  accessToken,
+  userId,
+  commenterName,
+  operationId,
+  commentText,
+  context,
+  fallback = false,
+  beforeLink,
+}: {
+  automation: DeliverableAutomation;
+  accessToken: InstagramContext;
+  userId: string;
+  commenterName: string | null;
+  operationId: string;
+  commentText: string;
+  context: string;
+  fallback?: boolean;
+  beforeLink?: () => Promise<void>;
+}): Promise<LinkDelivery> {
+  const dedupeId = `reveal:${userId}`;
+
+  const usage = await reserveWorkspaceDMSend(automation.workspaceId);
+  if (!usage.allowed) {
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: {
+          automationId: automation.id,
+          commentId: dedupeId,
+        },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: userId,
+        commenterName,
+        commentText,
+        commentId: dedupeId,
+        status: "SKIPPED_PLAN_LIMIT",
+        errorMessage: `Monthly DM limit reached (${usage.limit})`,
+      },
+      update: { status: "SKIPPED_PLAN_LIMIT" },
+    });
+    return "plan_limit";
+  }
+
+  try {
+    const delivered = await sendPostbackOnce({
+      operationId,
+      send: async () => {
+        await beforeLink?.();
+        await sendRevealDirectMessage({
+          accessToken: accessToken,
+          automation: automation,
+          userId: userId,
+          commenterName: commenterName,
+          context,
+        });
+      },
+    });
+    if (!delivered) {
+      await releaseWorkspaceDMReservation(
+        automation.workspaceId,
+        usage.periodStart,
+      );
+      return "already_claimed";
+    }
+    // Optional appreciation follow-up: once the link has been delivered, send a
+    // short thank-you. It is scheduled as its own delayed job so it can go out
+    // some minutes later (followUpDelayMinutes) rather than immediately. The
+    // deterministic job id dedupes repeat button taps to one follow-up per user.
+    if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
+      const delayMs =
+        Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000;
+      await getDMQueue().add(
+        FOLLOWUP_JOB_NAME,
+        {
+          instagramAccountId: automation.instagramAccount.instagramId,
+          accountConnectionId: automation.instagramAccountId,
+          userId,
+          automationId: automation.id,
+          commenterName,
+        },
+        {
+          delay: delayMs,
+          jobId: `followup_${automation.id}_${userId}`,
+        },
+      );
+    }
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: {
+          automationId: automation.id,
+          commentId: dedupeId,
+        },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: userId,
+        commenterName,
+        commentText,
+        commentId: dedupeId,
+        status: "SENT",
+        dmSentAt: new Date(),
+      },
+      update: { status: "SENT", dmSentAt: new Date(), errorMessage: null },
+    });
+    return "sent";
+  } catch (originalError) {
+    const error = classifySendError(originalError);
+    if (isConfirmedSendRejection(error)) await releaseWorkspaceDMReservation(
+      automation.workspaceId,
+      usage.periodStart,
+    );
+
+    // The read fallback is speculative: it only runs when the user read the
+    // opening DM and never tapped the button, which means they never messaged
+    // us, which means the 24-hour window is closed and Meta rejects the send
+    // ("outside of allowed window"). That is the expected outcome here, not a
+    // failure the user can act on — so don't log it as FAILED and don't retry
+    // it against a window that cannot reopen on its own. It still delivers in
+    // the case that does work: the user replied by typing instead of tapping.
+    if (fallback && !isDeliveryUnconfirmed(error)) {
+      console.log(
+        "[DM Worker] Read fallback not delivered (messaging window closed):",
+        formatError(error),
+      );
+      return "not_sent";
+    }
+
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: {
+          automationId: automation.id,
+          commentId: dedupeId,
+        },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: userId,
+        commenterName,
+        commentText,
+        commentId: dedupeId,
+        status: "FAILED",
+        errorMessage: formatError(error),
+        dmDeliveryUnconfirmed: isDeliveryUnconfirmed(error),
+      },
+      update: {
+        status: "FAILED",
+        errorMessage: formatError(error),
+        dmDeliveryUnconfirmed: isDeliveryUnconfirmed(error),
+      },
+    });
+    throw error;
   }
 }
 
@@ -1080,141 +1317,46 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     }
   }
 
-  const usage = await reserveWorkspaceDMSend(automation.workspaceId);
-  if (!usage.allowed) {
-    await prisma.dmLog.upsert({
-      where: {
-        automationId_commentId: {
-          automationId: automation.id,
-          commentId: dedupeId,
-        },
-      },
-      create: {
-        workspaceId: automation.workspaceId,
-        automationId: automation.id,
-        instagramAccountId: automation.instagramAccountId,
-        commenterId: userId,
-        commenterName,
-        commentText: "(button tap)",
-        commentId: dedupeId,
-        status: "SKIPPED_PLAN_LIMIT",
-        errorMessage: `Monthly DM limit reached (${usage.limit})`,
-      },
-      update: { status: "SKIPPED_PLAN_LIMIT" },
+  // Email gate (after the follow gate, before the link): someone who has not
+  // left an email gets the ask instead. A read fallback is not a reply, so it
+  // never asks; it just does not deliver.
+  if (await emailStillNeeded(automation, userId)) {
+    if (fallback) return;
+    const ask = buildEmailAsk(
+      automation,
+      commenterName,
+      offersEmailQuickReply(automation, accessToken),
+    );
+    await startEmailGate({
+      automation,
+      igsid: userId,
+      username: commenterName,
+      prompt: ask,
+      send: () =>
+        sendPostbackOnce({
+          operationId,
+          send: () =>
+            sendEmailGateMessage({
+              context: accessToken,
+              automation,
+              userId,
+              message: ask,
+            }),
+        }),
     });
     return;
   }
 
-  try {
-    const delivered = await sendPostbackOnce({
-      operationId,
-      send: () =>
-        sendRevealDirectMessage({
-          accessToken: accessToken,
-          automation: automation,
-          userId: userId,
-          commenterName: commenterName,
-          context: "postback",
-        }),
-    });
-    if (!delivered) {
-      await releaseWorkspaceDMReservation(
-        automation.workspaceId,
-        usage.periodStart,
-      );
-      return;
-    }
-    // Optional appreciation follow-up: once the link has been delivered, send a
-    // short thank-you. It is scheduled as its own delayed job so it can go out
-    // some minutes later (followUpDelayMinutes) rather than immediately. The
-    // deterministic job id dedupes repeat button taps to one follow-up per user.
-    if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
-      const delayMs =
-        Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000;
-      await getDMQueue().add(
-        FOLLOWUP_JOB_NAME,
-        {
-          instagramAccountId: automation.instagramAccount.instagramId,
-          accountConnectionId: automation.instagramAccountId,
-          userId,
-          automationId: automation.id,
-          commenterName,
-        },
-        {
-          delay: delayMs,
-          jobId: `followup_${automation.id}_${userId}`,
-        },
-      );
-    }
-    await prisma.dmLog.upsert({
-      where: {
-        automationId_commentId: {
-          automationId: automation.id,
-          commentId: dedupeId,
-        },
-      },
-      create: {
-        workspaceId: automation.workspaceId,
-        automationId: automation.id,
-        instagramAccountId: automation.instagramAccountId,
-        commenterId: userId,
-        commenterName,
-        commentText: "(button tap)",
-        commentId: dedupeId,
-        status: "SENT",
-        dmSentAt: new Date(),
-      },
-      update: { status: "SENT", dmSentAt: new Date(), errorMessage: null },
-    });
-  } catch (originalError) {
-    const error = classifySendError(originalError);
-    if (isConfirmedSendRejection(error)) await releaseWorkspaceDMReservation(
-      automation.workspaceId,
-      usage.periodStart,
-    );
-
-    // The read fallback is speculative: it only runs when the user read the
-    // opening DM and never tapped the button, which means they never messaged
-    // us, which means the 24-hour window is closed and Meta rejects the send
-    // ("outside of allowed window"). That is the expected outcome here, not a
-    // failure the user can act on — so don't log it as FAILED and don't retry
-    // it against a window that cannot reopen on its own. It still delivers in
-    // the case that does work: the user replied by typing instead of tapping.
-    if (fallback && !isDeliveryUnconfirmed(error)) {
-      console.log(
-        "[DM Worker] Read fallback not delivered (messaging window closed):",
-        formatError(error),
-      );
-      return;
-    }
-
-    await prisma.dmLog.upsert({
-      where: {
-        automationId_commentId: {
-          automationId: automation.id,
-          commentId: dedupeId,
-        },
-      },
-      create: {
-        workspaceId: automation.workspaceId,
-        automationId: automation.id,
-        instagramAccountId: automation.instagramAccountId,
-        commenterId: userId,
-        commenterName,
-        commentText: "(button tap)",
-        commentId: dedupeId,
-        status: "FAILED",
-        errorMessage: formatError(error),
-        dmDeliveryUnconfirmed: isDeliveryUnconfirmed(error),
-      },
-      update: {
-        status: "FAILED",
-        errorMessage: formatError(error),
-        dmDeliveryUnconfirmed: isDeliveryUnconfirmed(error),
-      },
-    });
-    throw error;
-  }
+  await deliverReveal({
+    automation,
+    accessToken,
+    userId,
+    commenterName,
+    operationId,
+    commentText: "(button tap)",
+    context: "postback",
+    fallback: Boolean(fallback),
+  });
 }
 
 /**
@@ -1275,6 +1417,7 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  * skips the opening DM (which exists to work around private-reply limits from
  * comments) and delivers the reveal directly, honouring the follow gate.
  * Dedup is per inbound message id, so each message triggers at most one reply.
+ * An open email gate sees the message first (see handleEmailGateReply).
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
@@ -1297,8 +1440,23 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     orderBy: { createdAt: "asc" },
   });
 
+  // A reply to an open email ask belongs to that campaign, not to whichever
+  // keyword it happens to contain, so the gate answers before the loop.
+  const handledByEmailGate = await handleEmailGateReply({
+    message: job.data,
+    operationId: `${job.id}:email-gate`,
+    keywordCampaigns: automations,
+    deps: {
+      sendOnce: sendPostbackOnce,
+      deliverLink: (delivery) =>
+        deliverReveal({ ...delivery, context: "email capture" }),
+    },
+  });
+  if (handledByEmailGate) return;
+
   const dedupeId = `dm:${messageId}`;
 
+  let contactRecorded = false;
   for (const automation of automations) {
     const matchResult = automation.matchAnyWord
       ? { matched: true, matchedKeyword: null }
@@ -1329,12 +1487,24 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       continue;
     }
 
+    // A DM carries no username, so this only records the interaction.
+    if (!contactRecorded) {
+      contactRecorded = true;
+      await recordContactInteraction({
+        workspaceId: automation.workspaceId,
+        instagramAccountId: automation.instagramAccountId,
+        igsid: senderId,
+      });
+    }
+
     const logBase = {
       workspaceId: automation.workspaceId,
       automationId: automation.id,
       instagramAccountId: automation.instagramAccountId,
       commenterId: senderId,
-      commentText: messageText,
+      // An email typed into a DM stays out of the logs: the Contacts page is
+      // where emails live, and where deleting one removes it.
+      commentText: extractEmail(messageText) ? "(message with an email)" : messageText,
       commentId: dedupeId,
       matchedKeyword: matchResult.matchedKeyword,
     };
@@ -1414,6 +1584,40 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           : follows !== true;
     }
 
+    // Email gate, after the follow gate: no email yet means the ask goes out
+    // instead of the link. Read before the usage reservation below.
+    const askForEmail =
+      !sendFollowPrompt && (await emailStillNeeded(automation, senderId));
+
+    // Someone who went quiet on this campaign's ask is not asked again by a
+    // match-any-word campaign: it matches every message they send, so it
+    // would re-open the gate (attempts back to 0) on their very next DM. A
+    // keyword campaign still asks, since typing its keyword is a new request.
+    if (
+      askForEmail &&
+      automation.matchAnyWord &&
+      (await emailGateSilencedFor(automation, senderId))
+    ) {
+      await prisma.dmLog.upsert({
+        where: {
+          automationId_commentId: {
+            automationId: automation.id,
+            commentId: dedupeId,
+          },
+        },
+        create: {
+          ...logBase,
+          status: "SKIPPED_DEDUP",
+          errorMessage: "Email gate silenced: no email after repeated asks",
+        },
+        update: {
+          status: "SKIPPED_DEDUP",
+          errorMessage: "Email gate silenced: no email after repeated asks",
+        },
+      });
+      continue;
+    }
+
     const usage = await reserveWorkspaceDMSend(automation.workspaceId);
     if (!usage.allowed) {
       await prisma.dmLog.upsert({
@@ -1451,6 +1655,29 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           text: promptText,
           buttonTitle: automation.followPromptButtonLabel || "I'm following ✅",
           payload: `followcheck:${automation.id}`,
+        });
+      } else if (askForEmail) {
+        const ask = buildEmailAsk(
+          automation,
+          commenterName,
+          offersEmailQuickReply(automation, accessToken)
+        );
+        // Marked before the ask goes out: a redelivery (or a retry for
+        // another campaign) of this message must reach this loop and its
+        // `dm:` dedupe again, not be read as an answer to the ask.
+        await markEmailGateTrigger(automation.instagramAccountId, messageId);
+        await startEmailGate({
+          automation,
+          igsid: senderId,
+          username: commenterName,
+          prompt: ask,
+          send: () =>
+            sendEmailGateMessage({
+              context: accessToken,
+              automation,
+              userId: senderId,
+              message: ask,
+            }),
         });
       } else {
         await sendRevealDirectMessage({

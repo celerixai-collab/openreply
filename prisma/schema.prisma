@@ -85,6 +85,7 @@ model Workspace {
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
   operationalEvents OperationalEvent[]
+  contacts          Contact[]
 
   @@index([ownerId])
 }
@@ -144,6 +145,7 @@ model InstagramAccount {
   dmLogs      DmLog[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
+  contacts    Contact[]
 
   @@index([workspaceId])
 }
@@ -193,6 +195,15 @@ model Automation {
   requireFollow           Boolean @default(false)
   followPromptMessage     String?
   followPromptButtonLabel String?
+  // Email gate: the link is delivered only to someone who has left an email.
+  // Empty messages fall back to the defaults in lib/contacts/email-copy.ts.
+  collectEmail           Boolean @default(false)
+  emailPromptMessage     String?
+  emailInvalidMessage    String?
+  emailThanksMessage     String?
+  // Offer Instagram's one-tap `user_email` quick reply with the ask. Meta
+  // hides it on desktop and when the profile has no email.
+  emailQuickReplyEnabled Boolean @default(true)
   followUpEnabled Boolean @default(false)
   followUpMessage String?
   // Minutes to wait after the link is delivered before sending the follow-up.
@@ -214,10 +225,56 @@ model Automation {
   dmLogs           DmLog[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
+  capturedContacts Contact[]        @relation("ContactEmailAutomation")
 
   @@index([workspaceId])
   @@index([instagramAccountId])
   @@index([postId])
+}
+
+/// One person who interacted with a campaign on one connected Instagram
+/// account, plus the email-gate state for them. Only people a campaign
+/// actually matched are recorded, not every commenter on the account.
+model Contact {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  /// Internal InstagramAccount.id, not the Instagram professional account id.
+  instagramAccountId String
+  /// Instagram-scoped id of the person (the commenter / DM sender id).
+  igsid              String
+  username           String?
+
+  email             String?
+  emailCapturedAt   DateTime?
+  /// The campaign whose email gate captured the email.
+  emailAutomationId String?
+  /// "typed" or "quick_reply" (Instagram's one-tap email button).
+  emailSource       String?
+  /// Snapshot of the exact ask message that was sent: the consent record.
+  emailConsentText  String?
+
+  /// An open email gate: set only after its ask was sent, cleared once the
+  /// link has been delivered. One open gate per person at a time.
+  pendingEmailAutomationId String?
+  pendingEmailPrompt       String?
+  pendingEmailAttempts     Int       @default(0)
+  pendingEmailExpiresAt    DateTime?
+  /// Too many replies without an email: stop answering, but let later
+  /// messages reach the normal keyword campaigns again.
+  pendingEmailSilenced     Boolean   @default(false)
+
+  firstSeenAt       DateTime @default(now())
+  lastInteractionAt DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  emailAutomation  Automation?      @relation("ContactEmailAutomation", fields: [emailAutomationId], references: [id], onDelete: SetNull)
+
+  @@unique([instagramAccountId, igsid])
+  @@index([workspaceId, emailCapturedAt])
+  @@index([workspaceId, email])
+  @@index([emailAutomationId])
 }
 
 model DmLog {

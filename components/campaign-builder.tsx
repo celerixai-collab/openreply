@@ -20,6 +20,13 @@ import PostPicker from "@/components/post-picker";
 import CampaignPreview, { type PreviewTab } from "@/components/campaign-preview";
 import { readCache, writeCache } from "@/lib/client-cache";
 import {
+  DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_THANKS_MESSAGE,
+  MAX_DM_TEXT_BYTES,
+  defaultEmailPrompt,
+  utf8ByteLength,
+} from "@/lib/contacts/email-copy";
+import {
   IMPORT_QUEUE_KEY,
   IMPORT_ACCOUNT_KEY,
   type ImportRow,
@@ -46,6 +53,11 @@ interface LoadedCampaign {
   requireFollow: boolean;
   followPromptMessage: string | null;
   followPromptButtonLabel: string | null;
+  collectEmail?: boolean;
+  emailPromptMessage?: string | null;
+  emailInvalidMessage?: string | null;
+  emailThanksMessage?: string | null;
+  emailQuickReplyEnabled?: boolean;
   followUpEnabled: boolean;
   followUpMessage: string | null;
   followUpDelayMinutes: number | null;
@@ -130,6 +142,20 @@ function Toggle({
   );
 }
 
+// Instagram cuts DM text at 1000 UTF-8 bytes, not characters: a Chinese
+// character is 3 bytes and an emoji 4, so a message can look short and still
+// be too long.
+function ByteLimitWarning({ text }: { text: string }) {
+  const { t } = useI18n();
+  const bytes = utf8ByteLength(text);
+  if (bytes <= MAX_DM_TEXT_BYTES) return null;
+  return (
+    <p className="text-xs text-warning">
+      {t("This message is {bytes} bytes. Instagram allows {max} bytes (about 333 Chinese characters): shorten it to save the campaign.", { bytes, max: MAX_DM_TEXT_BYTES })}
+    </p>
+  );
+}
+
 export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderProps) {
   const { t } = useI18n();
   const router = useRouter();
@@ -179,6 +205,11 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
   const [followPromptMessage, setFollowPromptMessage] = useState("");
   const [followPromptButtonLabel, setFollowPromptButtonLabel] =
     useState("i'm following");
+  const [collectEmail, setCollectEmail] = useState(false);
+  const [emailPromptMessage, setEmailPromptMessage] = useState("");
+  const [emailInvalidMessage, setEmailInvalidMessage] = useState("");
+  const [emailThanksMessage, setEmailThanksMessage] = useState("");
+  const [emailQuickReplyEnabled, setEmailQuickReplyEnabled] = useState(true);
   const [followUpEnabled, setFollowUpEnabled] = useState(false);
   const [followUpMessage, setFollowUpMessage] = useState("");
   const [followUpDelayMinutes, setFollowUpDelayMinutes] = useState(0);
@@ -287,6 +318,11 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
         setFollowPromptButtonLabel(
           c.followPromptButtonLabel ?? "i'm following"
         );
+        setCollectEmail(c.collectEmail ?? false);
+        setEmailPromptMessage(c.emailPromptMessage ?? "");
+        setEmailInvalidMessage(c.emailInvalidMessage ?? "");
+        setEmailThanksMessage(c.emailThanksMessage ?? "");
+        setEmailQuickReplyEnabled(c.emailQuickReplyEnabled ?? true);
         setFollowUpEnabled(c.followUpEnabled ?? false);
         setFollowUpMessage(c.followUpMessage ?? "");
         setFollowUpDelayMinutes(c.followUpDelayMinutes ?? 0);
@@ -426,6 +462,12 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
       followPromptButtonLabel: requireFollow
         ? followPromptButtonLabel.trim() || "i'm following"
         : "",
+      collectEmail,
+      // Empty means the default copy; the API stores it as null.
+      emailPromptMessage: collectEmail ? emailPromptMessage.trim() : "",
+      emailInvalidMessage: collectEmail ? emailInvalidMessage.trim() : "",
+      emailThanksMessage: collectEmail ? emailThanksMessage.trim() : "",
+      emailQuickReplyEnabled,
       followUpEnabled,
       followUpMessage: followUpEnabled ? followUpMessage.trim() : "",
       followUpDelayMinutes: followUpEnabled ? followUpDelayMinutes : 0,
@@ -860,6 +902,89 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
               </div>
             )}
           </div>
+          <div className="mt-3 rounded-lg border border-border p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-foreground">
+                {t("an email request before the link")}
+              </span>
+              <Toggle
+                on={collectEmail}
+                onToggle={() => setCollectEmail(!collectEmail)}
+              />
+            </div>
+            {collectEmail && (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs text-muted">
+                  {t("We ask for their email and send the link only after they reply with one. People who already left an email get the link right away. Leave a message empty to use the default shown.")}
+                </p>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">
+                    {t("Asking for the email")}
+                  </label>
+                  <textarea
+                    value={emailPromptMessage}
+                    onChange={(e) => setEmailPromptMessage(e.target.value)}
+                    placeholder={defaultEmailPrompt(emailQuickReplyEnabled)}
+                    rows={4}
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none resize-none"
+                    maxLength={1000}
+                  />
+                  <ByteLimitWarning text={emailPromptMessage} />
+                  {emailPromptMessage.trim() && (
+                    <p className="text-xs text-muted">
+                      {t("Say what the email will be used for and how to unsubscribe: the message they reply to is kept as their consent.")}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">
+                    {t("If the reply is not an email")}
+                  </label>
+                  <textarea
+                    value={emailInvalidMessage}
+                    onChange={(e) => setEmailInvalidMessage(e.target.value)}
+                    placeholder={DEFAULT_EMAIL_INVALID_MESSAGE}
+                    rows={2}
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none resize-none"
+                    maxLength={1000}
+                  />
+                  <ByteLimitWarning text={emailInvalidMessage} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground">
+                    {t("After they share it")}
+                  </label>
+                  <textarea
+                    value={emailThanksMessage}
+                    onChange={(e) => setEmailThanksMessage(e.target.value)}
+                    placeholder={DEFAULT_EMAIL_THANKS_MESSAGE}
+                    rows={2}
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none resize-none"
+                    maxLength={1000}
+                  />
+                  <ByteLimitWarning text={emailThanksMessage} />
+                </div>
+                <p className="text-xs text-muted">
+                  {"{username}"} {t("personalizes;")} {"{email}"} {t("inserts the email they sent (only in the message after they share it).")}
+                </p>
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+                  <span className="text-sm text-foreground">
+                    {t("one-tap email button")}
+                  </span>
+                  <Toggle
+                    on={emailQuickReplyEnabled}
+                    onToggle={() =>
+                      setEmailQuickReplyEnabled(!emailQuickReplyEnabled)
+                    }
+                  />
+                </div>
+                <p className="text-xs text-muted">
+                  {t("Instagram shows a button that fills in their email with one tap. It appears only in the Instagram phone app, and only when their account has an email: people on desktop won't see it and can type their email instead.")}{" "}
+                  {t("A comment's first reply cannot carry it either, so it shows only when an opening DM or the follow step comes first.")}
+                </p>
+              </div>
+            )}
+          </div>
         </Section>
 
         <Section title={t("And then, they will get")}>
@@ -1007,6 +1132,10 @@ export default function CampaignBuilder({ mode, campaignId }: CampaignBuilderPro
             requireFollow={requireFollow}
             followPromptMessage={followPromptMessage}
             followPromptButtonLabel={followPromptButtonLabel || "i'm following"}
+            collectEmail={collectEmail}
+            emailPromptMessage={emailPromptMessage}
+            emailThanksMessage={emailThanksMessage}
+            emailQuickReplyEnabled={emailQuickReplyEnabled}
             followUpEnabled={followUpEnabled}
             followUpMessage={followUpMessage}
             followUpDelayMinutes={followUpDelayMinutes}

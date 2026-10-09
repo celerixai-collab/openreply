@@ -19,6 +19,12 @@ import {
   canManageWorkspace,
   getCurrentWorkspaceContext,
 } from "@/lib/workspace-access";
+import {
+  createEmailGateFields,
+  emailGateCreateData,
+  normalizeEmailGateUpdate,
+  updateEmailGateFields,
+} from "@/lib/campaigns/email-gate-settings";
 
 // This list is read-your-writes (created/imported campaigns must show up
 // immediately), so never cache it at the route or CDN layer.
@@ -44,6 +50,8 @@ const createAutomationSchema = z
     requireFollow: z.boolean().optional().default(false),
     followPromptMessage: z.string().max(1000).optional().nullable(),
     followPromptButtonLabel: z.string().max(20).optional().nullable(),
+    // Email gate: the link is sent only once the person has left an email.
+    ...createEmailGateFields,
     followUpEnabled: z.boolean().optional().default(false),
     followUpMessage: z.string().max(1000).optional().nullable(),
     // Minutes to wait before the follow-up. Capped at 24h so it stays inside
@@ -107,6 +115,7 @@ const updateAutomationSchema = z.object({
   requireFollow: z.boolean().optional(),
   followPromptMessage: z.string().max(1000).optional().nullable(),
   followPromptButtonLabel: z.string().max(20).optional().nullable(),
+  ...updateEmailGateFields,
   followUpEnabled: z.boolean().optional(),
   followUpMessage: z.string().max(1000).optional().nullable(),
   followUpDelayMinutes: z.number().int().min(0).max(1440).optional(),
@@ -152,7 +161,8 @@ export async function GET(request: NextRequest) {
         select: { username: true, instagramId: true },
       },
       _count: {
-        select: { dmLogs: true },
+        // capturedContacts: emails this campaign's email gate collected.
+        select: { dmLogs: true, capturedContacts: true },
       },
       trackedLinks: {
         select: {
@@ -399,6 +409,7 @@ export async function POST(request: NextRequest) {
       followPromptButtonLabel: parsed.data.requireFollow
         ? parsed.data.followPromptButtonLabel || null
         : null,
+      ...emailGateCreateData(parsed.data),
       followUpEnabled: parsed.data.followUpEnabled,
       followUpMessage: parsed.data.followUpEnabled
         ? parsed.data.followUpMessage || null
@@ -502,6 +513,7 @@ export async function PATCH(request: NextRequest) {
     automationData.followPromptMessage = null;
     automationData.followPromptButtonLabel = null;
   }
+  normalizeEmailGateUpdate(automationData);
   if (automationData.followUpEnabled === false) {
     automationData.followUpMessage = null;
     automationData.followUpDelayMinutes = 0;

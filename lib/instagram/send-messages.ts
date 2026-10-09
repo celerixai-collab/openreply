@@ -216,6 +216,41 @@ export async function sendDirectMessage({
   return sendZernioMessage({ context, recipientId: userId, text: message });
 }
 
+// The quick reply payload the email gate attaches to its one-tap email button.
+// Its presence on an inbound message marks the email as tapped, not typed.
+export const EMAIL_QUICK_REPLY_PAYLOAD = "email_gate";
+
+/** Whether this provider can attach Instagram's `user_email` quick reply. */
+export function supportsEmailQuickReply(context: InstagramContext): boolean {
+  return context.provider === "META";
+}
+
+/**
+ * Send a DM offering Instagram's one-tap email quick reply. Providers that
+ * cannot attach quick replies send the same text without the button.
+ */
+export async function sendDirectMessageWithEmailQuickReply({
+  context,
+  instagramAccountId,
+  userId,
+  message,
+}: {
+  context: InstagramContext;
+  instagramAccountId: string;
+  userId: string;
+  message: string;
+}) {
+  if (context.provider === "META")
+    return meta.sendDirectMessageWithEmailQuickReply(
+      context.accessToken,
+      instagramAccountId,
+      userId,
+      message,
+      EMAIL_QUICK_REPLY_PAYLOAD
+    );
+  return sendZernioMessage({ context, recipientId: userId, text: message });
+}
+
 export async function sendDirectMessageWithLinkButton({
   context,
   instagramAccountId,

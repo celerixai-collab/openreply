@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
@@ -9,6 +10,7 @@ const {
   mockSendDirectMessageWithButton,
   mockSendDirectMessage,
   mockSendDirectMessageWithLinkButton,
+  mockSendDirectMessageWithEmailQuickReply,
   mockDecryptToken,
   mockMatchKeywords,
   mockReserveDMSlot,
@@ -19,7 +21,7 @@ const {
 } = vi.hoisted(() => ({
   mockPrisma: {
     zernioConnection: { findUnique: vi.fn() },
-    postbackDelivery: { create: vi.fn(), delete: vi.fn() },
+    postbackDelivery: { create: vi.fn(), delete: vi.fn(), findUnique: vi.fn() },
     automation: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -38,6 +40,12 @@ const {
     operationalEvent: {
       create: vi.fn(),
     },
+    contact: {
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      upsert: vi.fn(),
+      updateMany: vi.fn(),
+    },
   },
   mockSendPrivateReply: vi.fn(),
   mockSendPrivateReplyWithLinkButton: vi.fn(),
@@ -46,6 +54,7 @@ const {
   mockSendDirectMessageWithButton: vi.fn(),
   mockSendDirectMessage: vi.fn(),
   mockSendDirectMessageWithLinkButton: vi.fn(),
+  mockSendDirectMessageWithEmailQuickReply: vi.fn(),
   mockDecryptToken: vi.fn(),
   mockMatchKeywords: vi.fn(),
   mockReserveDMSlot: vi.fn(),
@@ -67,6 +76,7 @@ vi.mock("@/lib/meta/client", () => ({
   sendDirectMessageWithButton: mockSendDirectMessageWithButton,
   sendDirectMessage: mockSendDirectMessage,
   sendDirectMessageWithLinkButton: mockSendDirectMessageWithLinkButton,
+  sendDirectMessageWithEmailQuickReply: mockSendDirectMessageWithEmailQuickReply,
   sendCommentReply: vi.fn(),
   MetaApiError: class MetaApiError extends Error {
     code: number;
@@ -141,6 +151,11 @@ import { MetaApiError, RateLimitError } from "@/lib/meta/client";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
+import {
+  DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_PROMPT_MESSAGE,
+  defaultEmailPrompt,
+} from "@/lib/contacts/email-copy";
 
 const usagePeriodStart = new Date("2026-05-01T00:00:00.000Z");
 
@@ -224,6 +239,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.postbackDelivery.create.mockReset().mockResolvedValue({});
   mockPrisma.postbackDelivery.delete.mockReset().mockResolvedValue({});
+  mockPrisma.postbackDelivery.findUnique.mockReset().mockResolvedValue(null);
+  // No contacts by default: nobody has an email or an open email gate, so
+  // every campaign without collectEmail runs exactly as it always has.
+  mockPrisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  mockPrisma.contact.findUnique.mockReset().mockResolvedValue(null);
+  mockPrisma.contact.upsert.mockReset().mockResolvedValue({});
+  mockPrisma.contact.updateMany.mockReset().mockResolvedValue({ count: 0 });
 
   mockPrisma.automation.findMany.mockResolvedValue([mockAutomation]);
   mockPrisma.automation.findFirst.mockResolvedValue(null);
@@ -287,6 +309,10 @@ beforeEach(() => {
   mockSendDirectMessageWithLinkButton.mockResolvedValue({
     recipient_id: "commenter_999",
     message_id: "msg_006",
+  });
+  mockSendDirectMessageWithEmailQuickReply.mockReset().mockResolvedValue({
+    recipient_id: "commenter_999",
+    message_id: "msg_007",
   });
   mockGetUserFollowStatus.mockResolvedValue(true);
 });
@@ -1763,4 +1789,977 @@ it("retains the public reply claim if sending succeeded but its log write failed
   await process({ ...createMockJob(), id: "next-poll" });
   expect(sendCommentReply).toHaveBeenCalledTimes(1);
   expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+});
+
+describe("DM Worker — email gate", () => {
+  type FakeContact = {
+    id: string;
+    workspaceId: string;
+    instagramAccountId: string;
+    igsid: string;
+    username: string | null;
+    email: string | null;
+    emailCapturedAt: Date | null;
+    emailAutomationId: string | null;
+    emailSource: string | null;
+    emailConsentText: string | null;
+    pendingEmailAutomationId: string | null;
+    pendingEmailPrompt: string | null;
+    pendingEmailAttempts: number;
+    pendingEmailExpiresAt: Date | null;
+    pendingEmailSilenced: boolean;
+    firstSeenAt: Date;
+    lastInteractionAt: Date;
+  };
+
+  const IN_A_DAY = () => new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const LINK_TEXT = "Hey commenter_user! Here is the link: https://example.com";
+
+  const gated = {
+    ...mockAutomation,
+    collectEmail: true,
+    emailPromptMessage: null,
+    emailInvalidMessage: null,
+    emailThanksMessage: null,
+    emailQuickReplyEnabled: true,
+    requireFollow: false,
+    followUpEnabled: false,
+  };
+
+  let contacts: FakeContact[];
+  let claims: Set<string>;
+
+  // A small in-memory stand-in for the Contact table: equality filters only,
+  // which is all the gate's compare-and-set writes use. Each call runs to
+  // completion before the next, like a single-row atomic update.
+  function matches(row: FakeContact, where: Record<string, unknown>) {
+    return Object.entries(where).every(([key, value]) => {
+      if (key === "instagramAccount") return true;
+      if (key === "instagramAccountId_igsid") {
+        const compound = value as { instagramAccountId: string; igsid: string };
+        return (
+          row.instagramAccountId === compound.instagramAccountId &&
+          row.igsid === compound.igsid
+        );
+      }
+      const actual = (row as Record<string, unknown>)[key];
+      if (value instanceof Date) {
+        return actual instanceof Date && actual.getTime() === value.getTime();
+      }
+      return actual === value;
+    });
+  }
+
+  function seedContact(fields: Partial<FakeContact> = {}): FakeContact {
+    const row: FakeContact = {
+      id: `contact_${contacts.length + 1}`,
+      workspaceId: "workspace_123",
+      instagramAccountId: "ig_account_row_1",
+      igsid: "commenter_999",
+      username: "commenter_user",
+      email: null,
+      emailCapturedAt: null,
+      emailAutomationId: null,
+      emailSource: null,
+      emailConsentText: null,
+      pendingEmailAutomationId: null,
+      pendingEmailPrompt: null,
+      pendingEmailAttempts: 0,
+      pendingEmailExpiresAt: null,
+      pendingEmailSilenced: false,
+      firstSeenAt: new Date(),
+      lastInteractionAt: new Date(),
+      ...fields,
+    };
+    contacts.push(row);
+    return row;
+  }
+
+  function openGate(fields: Partial<FakeContact> = {}) {
+    return seedContact({
+      pendingEmailAutomationId: "auto_789",
+      pendingEmailPrompt: "ASK SENT EARLIER",
+      pendingEmailExpiresAt: IN_A_DAY(),
+      ...fields,
+    });
+  }
+
+  function messageJob(text: string, extra: Record<string, unknown> = {}) {
+    return {
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        accountConnectionId: "ig_account_row_1",
+        messageId: "mid_email_1",
+        messageText: text,
+        senderId: "commenter_999",
+        ...extra,
+      },
+      id: `message_job_${String(extra.messageId ?? "1")}`,
+      attemptsMade: 0,
+    };
+  }
+
+  function directTexts() {
+    return mockSendDirectMessage.mock.calls.map((call) => call[3]);
+  }
+
+  beforeEach(() => {
+    contacts = [];
+    claims = new Set();
+    mockPrisma.contact.findFirst.mockImplementation(
+      async ({ where }: { where: Record<string, unknown> }) => {
+        const row = contacts.find((c) => matches(c, where));
+        return row ? { ...row } : null;
+      }
+    );
+    mockPrisma.contact.findUnique.mockImplementation(
+      async ({ where }: { where: Record<string, unknown> }) => {
+        const row = contacts.find((c) => matches(c, where));
+        return row ? { ...row } : null;
+      }
+    );
+    mockPrisma.contact.upsert.mockImplementation(
+      async ({
+        where,
+        create,
+        update,
+      }: {
+        where: Record<string, unknown>;
+        create: Partial<FakeContact>;
+        update: Partial<FakeContact>;
+      }) => {
+        const row = contacts.find((c) => matches(c, where));
+        if (row) {
+          Object.assign(row, update);
+          return { ...row };
+        }
+        return { ...seedContact(create) };
+      }
+    );
+    mockPrisma.contact.updateMany.mockImplementation(
+      async ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown>;
+        data: Partial<FakeContact>;
+      }) => {
+        const rows = contacts.filter((c) => matches(c, where));
+        rows.forEach((row) => Object.assign(row, data));
+        return { count: rows.length };
+      }
+    );
+    mockPrisma.postbackDelivery.create.mockImplementation(
+      async ({ data }: { data: { id: string } }) => {
+        if (claims.has(data.id)) throw { code: "P2002" };
+        claims.add(data.id);
+        return data;
+      }
+    );
+    mockPrisma.postbackDelivery.delete.mockImplementation(
+      async ({ where }: { where: { id: string } }) => {
+        claims.delete(where.id);
+      }
+    );
+    mockPrisma.postbackDelivery.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) =>
+        claims.has(where.id) ? { id: where.id } : null
+    );
+    // The gate's campaign is loaded by id; DM-trigger campaigns by findMany.
+    mockPrisma.automation.findFirst.mockResolvedValue(gated);
+    mockPrisma.automation.findMany.mockResolvedValue([]);
+    mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+  });
+
+  describe("starting the gate", () => {
+    it("asks for the email in the comment's private reply instead of sending the link", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([gated]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(createMockJob());
+
+      // The one private reply this comment allows is the ask, as plain text
+      // and without the hint about a quick-reply button it cannot carry.
+      expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+      expect(mockSendPrivateReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "comment_555",
+        defaultEmailPrompt(false)
+      );
+      expect(defaultEmailPrompt(false)).not.toContain("按鈕");
+      expect(mockSendPrivateReplyWithLinkButton).not.toHaveBeenCalled();
+      // The comment still counts as answered, so the reconciler leaves it be.
+      expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: "SENT" }),
+        })
+      );
+      expect(contacts).toHaveLength(1);
+      expect(contacts[0]).toMatchObject({
+        username: "commenter_user",
+        email: null,
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailPrompt: defaultEmailPrompt(false),
+        pendingEmailAttempts: 0,
+        pendingEmailSilenced: false,
+      });
+      const ttl = contacts[0].pendingEmailExpiresAt!.getTime() - Date.now();
+      expect(ttl).toBeGreaterThan(6.9 * 24 * 60 * 60 * 1000);
+      expect(ttl).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000);
+    });
+
+    it("does not open the gate when the ask is rejected outright", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([gated]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      mockSendPrivateReply.mockRejectedValue(new RateLimitError("slow down"));
+
+      await expect(getProcessor()(createMockJob())).rejects.toThrow("slow down");
+
+      expect(contacts[0]?.pendingEmailAutomationId ?? null).toBeNull();
+    });
+
+    it("skips the ask and sends the link to someone whose email is already known", async () => {
+      seedContact({ email: "known@example.com", emailCapturedAt: new Date() });
+      mockPrisma.automation.findMany.mockResolvedValue([gated]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(createMockJob());
+
+      expect(mockSendPrivateReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "comment_555",
+        LINK_TEXT
+      );
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+    });
+
+    it("asks by DM, with the one-tap email button, after a button tap passes the follow gate", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        requireFollow: true,
+      });
+      mockGetUserFollowStatus.mockResolvedValue(true);
+
+      await getProcessor()(
+        createMockPostbackJob({
+          instagramAccountId: "ig_456",
+          userId: "commenter_999",
+          payload: "followcheck:auto_789",
+          mid: "tap_1",
+        })
+      );
+
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        DEFAULT_EMAIL_PROMPT_MESSAGE,
+        "email_gate"
+      );
+      // No link, and no usage reserved for one.
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailPrompt: DEFAULT_EMAIL_PROMPT_MESSAGE,
+      });
+    });
+
+    it("still follows the follow gate first: a non-follower tapping the opening DM gets the follow prompt", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        requireFollow: true,
+      });
+      mockGetUserFollowStatus.mockResolvedValue(false);
+
+      await getProcessor()(
+        createMockPostbackJob({
+          instagramAccountId: "ig_456",
+          userId: "commenter_999",
+          payload: "followcheck:auto_789:open",
+        })
+      );
+
+      expect(mockSendDirectMessageWithButton).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        expect.any(String),
+        expect.any(String),
+        "followcheck:auto_789"
+      );
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+      expect(contacts).toHaveLength(0);
+    });
+
+    it("sends the ask as plain text, without the button hint, when the quick reply is off", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        emailQuickReplyEnabled: false,
+      });
+
+      await getProcessor()(createMockPostbackJob());
+
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+      expect(mockSendDirectMessage).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        defaultEmailPrompt(false)
+      );
+    });
+
+    it("does nothing on a read fallback while the email is unknown", async () => {
+      await getProcessor()(
+        createMockPostbackJob({
+          instagramAccountId: "ig_456",
+          userId: "commenter_999",
+          payload: "reveal:auto_789",
+          fallback: true,
+        })
+      );
+
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+      expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+      expect(contacts).toHaveLength(0);
+    });
+
+    it("lets a read fallback deliver once the email is known", async () => {
+      seedContact({ email: "known@example.com", emailCapturedAt: new Date() });
+
+      await getProcessor()(
+        createMockPostbackJob({
+          instagramAccountId: "ig_456",
+          userId: "commenter_999",
+          payload: "reveal:auto_789",
+          fallback: true,
+        })
+      );
+
+      expect(directTexts()).toEqual([LINK_TEXT]);
+    });
+
+    it("asks instead of sending the link on a DM keyword trigger", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...gated, dmTriggerEnabled: true },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(messageJob("can I get the LINK?"));
+
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        DEFAULT_EMAIL_PROMPT_MESSAGE,
+        "email_gate"
+      );
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            automationId_commentId: {
+              automationId: "auto_789",
+              commentId: "dm:mid_email_1",
+            },
+          },
+          create: expect.objectContaining({ status: "SENT" }),
+        })
+      );
+      expect(contacts[0].pendingEmailAutomationId).toBe("auto_789");
+    });
+
+    it("keeps every outbound gate message within Instagram's 1000-byte limit", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        emailPromptMessage: "請留下 Email 📩".repeat(200),
+      });
+
+      await getProcessor()(createMockPostbackJob());
+
+      const sent = mockSendDirectMessageWithEmailQuickReply.mock.calls[0][3];
+      expect(new TextEncoder().encode(sent).length).toBeLessThanOrEqual(1000);
+      expect(sent).not.toMatch(/�/);
+      expect(contacts[0].pendingEmailPrompt).toBe(sent);
+    });
+  });
+
+  describe("answering an open gate", () => {
+    it("stores a valid email, thanks once and then delivers the link", async () => {
+      openGate();
+
+      await getProcessor()(messageJob("我的信箱是 Leo@Gmail.com 謝謝"));
+
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        emailSource: "typed",
+        emailAutomationId: "auto_789",
+        emailConsentText: "ASK SENT EARLIER",
+        pendingEmailAutomationId: null,
+        pendingEmailExpiresAt: null,
+      });
+      expect(contacts[0].emailCapturedAt).toBeInstanceOf(Date);
+      // Thanks first, then the campaign's own link, through the reveal path.
+      expect(directTexts()).toEqual([
+        "收到 leo@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(mockReserveWorkspaceDMSend).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            automationId_commentId: {
+              automationId: "auto_789",
+              commentId: "reveal:commenter_999",
+            },
+          },
+          create: expect.objectContaining({
+            status: "SENT",
+            commentText: "(email reply)",
+          }),
+        })
+      );
+    });
+
+    it("schedules the follow-up after the link, as a button tap does", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        followUpEnabled: true,
+        followUpMessage: "thanks for grabbing it",
+        followUpDelayMinutes: 5,
+      });
+      openGate();
+
+      await getProcessor()(messageJob("leo@gmail.com"));
+
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        "process-followup",
+        expect.objectContaining({ userId: "commenter_999", automationId: "auto_789" }),
+        expect.objectContaining({ delay: 5 * 60_000, jobId: "followup_auto_789_commenter_999" })
+      );
+    });
+
+    it("reads a full-width email typed with a Chinese IME", async () => {
+      openGate();
+
+      await getProcessor()(messageJob("ａｂｃ＠ｇｍａｉｌ．ｃｏｍ"));
+
+      expect(contacts[0].email).toBe("abc@gmail.com");
+      expect(directTexts()).toContain(LINK_TEXT);
+    });
+
+    it("records an email tapped from the quick reply as such", async () => {
+      openGate();
+
+      await getProcessor()(messageJob("leo@gmail.com", { fromQuickReply: true }));
+
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        emailSource: "quick_reply",
+      });
+    });
+
+    it("captures an email reply even when it contains another campaign's keyword", async () => {
+      const other = {
+        ...mockAutomation,
+        id: "auto_other",
+        dmTriggerEnabled: true,
+        keywords: ["link"],
+      };
+      mockPrisma.automation.findMany.mockResolvedValue([other]);
+      // The matcher reads "link@gmail.com" as the words "link gmail com".
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "link" });
+      openGate();
+
+      await getProcessor()(messageJob("link@gmail.com"));
+
+      expect(contacts[0].email).toBe("link@gmail.com");
+      expect(directTexts()).toEqual([
+        "收到 link@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ automationId: "auto_other" }),
+        })
+      );
+    });
+
+    it("does not let a match-any-word DM campaign steal a valid email reply", async () => {
+      const anyWord = {
+        ...mockAutomation,
+        id: "auto_any",
+        dmTriggerEnabled: true,
+        matchAnyWord: true,
+        keywords: [],
+      };
+      mockPrisma.automation.findMany.mockResolvedValue([anyWord]);
+      openGate();
+
+      await getProcessor()(messageJob("abc@gmail.com"));
+
+      expect(contacts[0].email).toBe("abc@gmail.com");
+      expect(directTexts()).toEqual([
+        "收到 abc@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ automationId: "auto_789" }),
+        })
+      );
+    });
+
+    it("does not let a match-any-word campaign end the gate on a reply without an email", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...mockAutomation, id: "auto_any", dmTriggerEnabled: true, matchAnyWord: true },
+      ]);
+      openGate();
+
+      await getProcessor()(messageJob("我不想給"));
+
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailAttempts: 1,
+      });
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
+    });
+
+    it("re-prompts and counts replies without an email", async () => {
+      openGate();
+      const process = getProcessor();
+
+      await process(messageJob("我不想給", { messageId: "mid_1" }));
+      expect(contacts[0].pendingEmailAttempts).toBe(1);
+      // Not an email attempt: the ask again, with the one-tap button.
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenLastCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        DEFAULT_EMAIL_PROMPT_MESSAGE,
+        "email_gate"
+      );
+
+      await process(messageJob("abc@gmail", { messageId: "mid_2" }));
+      expect(contacts[0].pendingEmailAttempts).toBe(2);
+      // Looks like a mistyped email: the invalid-email message.
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenLastCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "commenter_999",
+        DEFAULT_EMAIL_INVALID_MESSAGE,
+        "email_gate"
+      );
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(contacts[0].pendingEmailSilenced).toBe(false);
+    });
+
+    it("goes quiet after the 4th reply without an email, and hands later messages to the keyword campaigns", async () => {
+      const keywordCampaign = {
+        ...mockAutomation,
+        id: "auto_dm",
+        dmTriggerEnabled: true,
+        keywords: ["LINK"],
+      };
+      mockPrisma.automation.findMany.mockResolvedValue([keywordCampaign]);
+      openGate({ pendingEmailAttempts: 3 });
+      const process = getProcessor();
+
+      await process(messageJob("nope", { messageId: "mid_4" }));
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAttempts: 4,
+        pendingEmailSilenced: true,
+      });
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      await process(messageJob("LINK please", { messageId: "mid_5" }));
+      expect(directTexts()).toEqual([LINK_TEXT]);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            automationId_commentId: {
+              automationId: "auto_dm",
+              commentId: "dm:mid_5",
+            },
+          },
+        })
+      );
+    });
+
+    it("drops the gate when the reply is another DM campaign's keyword", async () => {
+      const keywordCampaign = {
+        ...mockAutomation,
+        id: "auto_dm",
+        dmTriggerEnabled: true,
+        keywords: ["PRICE"],
+      };
+      mockPrisma.automation.findMany.mockResolvedValue([keywordCampaign]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "PRICE" });
+      openGate();
+
+      await getProcessor()(messageJob("PRICE?"));
+
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+      expect(directTexts()).toEqual([LINK_TEXT]);
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+    });
+
+    it("clears an expired gate and treats the message as an ordinary DM", async () => {
+      const keywordCampaign = {
+        ...mockAutomation,
+        id: "auto_dm",
+        dmTriggerEnabled: true,
+      };
+      mockPrisma.automation.findMany.mockResolvedValue([keywordCampaign]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      openGate({ pendingEmailExpiresAt: new Date(Date.now() - 1000) });
+
+      await getProcessor()(messageJob("abc@gmail.com LINK"));
+
+      expect(contacts[0]).toMatchObject({
+        email: null,
+        pendingEmailAutomationId: null,
+      });
+      expect(directTexts()).toEqual([LINK_TEXT]);
+    });
+
+    it("clears the gate when its campaign stopped collecting emails", async () => {
+      mockPrisma.automation.findFirst.mockResolvedValue({ ...gated, collectEmail: false });
+      openGate();
+
+      await getProcessor()(messageJob("abc@gmail.com"));
+
+      expect(contacts[0]).toMatchObject({ email: null, pendingEmailAutomationId: null });
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    });
+
+    it("does not double-send when Meta delivers the same message twice", async () => {
+      openGate();
+      const process = getProcessor();
+
+      await process(messageJob("leo@gmail.com", { messageId: "mid_dup" }));
+      // A redelivery after BullMQ dropped the job id: the gate is closed by
+      // now, and a match-any-word campaign would answer anything it sees.
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...mockAutomation, id: "auto_any", dmTriggerEnabled: true, matchAnyWord: true },
+      ]);
+      await process({
+        ...messageJob("leo@gmail.com", { messageId: "mid_dup" }),
+        id: "redelivered_job",
+      });
+
+      expect(directTexts()).toEqual([
+        "收到 leo@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(mockReserveWorkspaceDMSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts a redelivered reply without an email only once", async () => {
+      openGate();
+      const process = getProcessor();
+
+      await process(messageJob("hmm", { messageId: "mid_same" }));
+      await process({ ...messageJob("hmm", { messageId: "mid_same" }), id: "again" });
+
+      expect(contacts[0].pendingEmailAttempts).toBe(1);
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+    });
+
+    it("delivers once when two email replies are handled at the same time", async () => {
+      openGate();
+      const process = getProcessor();
+
+      await Promise.all([
+        process(messageJob("first@gmail.com", { messageId: "mid_a" })),
+        process(messageJob("second@gmail.com", { messageId: "mid_b" })),
+      ]);
+
+      expect(contacts[0].email).toBe("first@gmail.com");
+      expect(directTexts()).toEqual([
+        "收到 first@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+    });
+
+    it("keeps the email and the open gate when the link fails, and the retry does not thank twice", async () => {
+      openGate();
+      mockSendDirectMessage.mockImplementation(
+        async (_token: string, _account: string, _user: string, text: string) => {
+          if (text === LINK_TEXT) throw new RateLimitError("slow down");
+          return { recipient_id: "commenter_999", message_id: "msg" };
+        }
+      );
+      const process = getProcessor();
+
+      await expect(process(messageJob("leo@gmail.com"))).rejects.toThrow("slow down");
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        pendingEmailAutomationId: "auto_789",
+      });
+
+      mockSendDirectMessage.mockResolvedValue({ recipient_id: "commenter_999", message_id: "msg" });
+      await process({ ...messageJob("leo@gmail.com"), attemptsMade: 1 });
+
+      expect(directTexts()).toEqual([
+        "收到 leo@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+        LINK_TEXT,
+      ]);
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+    });
+  });
+
+  describe("redeliveries, retries and limits", () => {
+    // A stateful DmLog, so the keyword loop's `dm:<mid>` dedupe sees what an
+    // earlier run of the same message wrote.
+    function trackDmLogs() {
+      const logs = new Map<string, Record<string, unknown>>();
+      const key = (where: { automationId_commentId: { automationId: string; commentId: string } }) =>
+        `${where.automationId_commentId.automationId}|${where.automationId_commentId.commentId}`;
+      mockPrisma.dmLog.findUnique.mockImplementation(
+        async ({ where }: { where: { automationId_commentId: { automationId: string; commentId: string } } }) =>
+          logs.get(key(where)) ?? null
+      );
+      mockPrisma.dmLog.upsert.mockImplementation(
+        async ({
+          where,
+          create,
+          update,
+        }: {
+          where: { automationId_commentId: { automationId: string; commentId: string } };
+          create: Record<string, unknown>;
+          update: Record<string, unknown>;
+        }) => {
+          const row = logs.get(key(where));
+          logs.set(key(where), row ? { ...row, ...update } : { ...create });
+          return logs.get(key(where));
+        }
+      );
+      return logs;
+    }
+
+    function revealClaimId(contact: FakeContact) {
+      const gate = `${contact.pendingEmailAutomationId}:${contact.pendingEmailExpiresAt?.toISOString()}`;
+      return createHash("sha256")
+        .update(JSON.stringify(["email-reveal", contact.id, gate]))
+        .digest("hex");
+    }
+
+    it("does not read a redelivered keyword trigger as the first answer to its own ask", async () => {
+      trackDmLogs();
+      mockPrisma.automation.findMany.mockResolvedValue([{ ...gated, dmTriggerEnabled: true }]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      const process = getProcessor();
+
+      await process(messageJob("LINK", { messageId: "mid_kw" }));
+      await process({ ...messageJob("LINK", { messageId: "mid_kw" }), id: "redelivered" });
+
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailAttempts: 0,
+      });
+    });
+
+    it("keeps the gate open when the trigger is retried for another campaign that failed", async () => {
+      const logs = trackDmLogs();
+      const other = { ...mockAutomation, id: "auto_other", dmTriggerEnabled: true, collectEmail: false };
+      mockPrisma.automation.findMany.mockResolvedValue([{ ...gated, dmTriggerEnabled: true }, other]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      mockSendDirectMessage.mockRejectedValueOnce(new Error("socket hang up"));
+      const process = getProcessor();
+
+      await expect(process(messageJob("LINK", { messageId: "mid_two" }))).rejects.toThrow(
+        "socket hang up"
+      );
+      await process({ ...messageJob("LINK", { messageId: "mid_two" }), attemptsMade: 1 });
+
+      // The ask went out once and its gate survived; only the failed
+      // campaign was retried.
+      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailAttempts: 0,
+      });
+      expect(directTexts()).toEqual([LINK_TEXT, LINK_TEXT]);
+      expect(logs.get("auto_other|dm:mid_two")).toMatchObject({ status: "SENT" });
+    });
+
+    it("does not let a match-any-word gated campaign re-open a silenced gate", async () => {
+      const logs = trackDmLogs();
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...gated, dmTriggerEnabled: true, matchAnyWord: true },
+      ]);
+      openGate({ pendingEmailAttempts: 3 });
+      const process = getProcessor();
+
+      await process(messageJob("nope", { messageId: "mid_4" }));
+      await process(messageJob("still no", { messageId: "mid_5" }));
+
+      expect(contacts[0]).toMatchObject({
+        pendingEmailAutomationId: "auto_789",
+        pendingEmailAttempts: 4,
+        pendingEmailSilenced: true,
+      });
+      expect(mockSendDirectMessageWithEmailQuickReply).not.toHaveBeenCalled();
+      expect(logs.get("auto_789|dm:mid_5")).toMatchObject({ status: "SKIPPED_DEDUP" });
+    });
+
+    it("hands later messages to the keyword campaigns once the link's send ended unconfirmed", async () => {
+      const keywordCampaign = { ...mockAutomation, id: "auto_dm", dmTriggerEnabled: true, keywords: ["PRICE"] };
+      mockPrisma.automation.findMany.mockResolvedValue([keywordCampaign]);
+      openGate();
+      // The link's send times out: Meta may have delivered it, so its claim
+      // is kept and the job is not retried.
+      mockSendDirectMessage.mockImplementation(
+        async (_token: string, _account: string, _user: string, text: string) => {
+          if (text === LINK_TEXT) throw new Error("socket hang up");
+          return { recipient_id: "commenter_999", message_id: "msg" };
+        }
+      );
+      const process = getProcessor();
+      await expect(process(messageJob("leo@gmail.com", { messageId: "mid_1" }))).rejects.toThrow(
+        "unconfirmed"
+      );
+      mockSendDirectMessage.mockResolvedValue({ recipient_id: "commenter_999", message_id: "msg" });
+      expect(contacts[0].email).toBe("leo@gmail.com");
+
+      // Meta redelivers the email message: still the gate's, nothing new.
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "PRICE" });
+      await process({ ...messageJob("leo@gmail.com", { messageId: "mid_1" }), id: "again" });
+      expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ automationId: "auto_dm" }) })
+      );
+
+      // A new message reaches the keyword campaigns instead of being eaten.
+      await process(messageJob("PRICE?", { messageId: "mid_2" }));
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { automationId_commentId: { automationId: "auto_dm", commentId: "dm:mid_2" } },
+          create: expect.objectContaining({ status: "SENT" }),
+        })
+      );
+    });
+
+    it("leaves the gate open while another attempt holds the link's claim, so its failure can retry", async () => {
+      const contact = openGate();
+      const reveal = revealClaimId(contact);
+      claims.add(reveal);
+      const process = getProcessor();
+
+      // The racing message: the link is someone else's to send.
+      await process(messageJob("second@gmail.com", { messageId: "mid_b" }));
+      expect(contacts[0]).toMatchObject({ pendingEmailAutomationId: "auto_789" });
+      expect(directTexts()).toEqual([]);
+
+      // The attempt holding the claim was rejected outright and retries.
+      claims.delete(reveal);
+      await process({ ...messageJob("first@gmail.com", { messageId: "mid_a" }), attemptsMade: 1 });
+
+      expect(directTexts()).toEqual([
+        "收到 second@gmail.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+    });
+
+    it("sends no thanks and keeps the gate open when the monthly DM limit holds the link back", async () => {
+      trackDmLogs();
+      mockReserveWorkspaceDMSend.mockResolvedValueOnce({
+        allowed: false,
+        reserved: false,
+        remaining: 0,
+        limit: 100,
+        periodStart: usagePeriodStart,
+      });
+      openGate();
+      const process = getProcessor();
+
+      await process(messageJob("leo@gmail.com", { messageId: "mid_1" }));
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        pendingEmailAutomationId: "auto_789",
+      });
+      expect(directTexts()).toEqual([]);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { automationId_commentId: { automationId: "auto_789", commentId: "reveal:commenter_999" } },
+          create: expect.objectContaining({ status: "SKIPPED_PLAN_LIMIT" }),
+        })
+      );
+
+      // The limit has reset: their next message gets the thanks and the link.
+      await process(messageJob("hello?", { messageId: "mid_2" }));
+      expect(directTexts()).toEqual(["收到 leo@gmail.com ✅ 連結馬上傳給你！", LINK_TEXT]);
+      expect(contacts[0].pendingEmailAutomationId).toBeNull();
+    });
+  });
+
+  describe("campaigns without the gate", () => {
+    it("keep an email typed into a DM out of the logs", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...mockAutomation, dmTriggerEnabled: true, collectEmail: false },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(messageJob("LINK pls, me@example.com"));
+
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ commentText: "(message with an email)" }),
+        })
+      );
+    });
+
+    it("send the link exactly as before and never look up an email", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...gated, collectEmail: false },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(createMockJob());
+
+      expect(mockSendPrivateReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "comment_555",
+        LINK_TEXT
+      );
+      expect(mockPrisma.contact.findUnique).not.toHaveBeenCalled();
+      // Only the bookkeeping row: matched people are listed as contacts.
+      expect(contacts).toHaveLength(1);
+      expect(contacts[0]).toMatchObject({
+        username: "commenter_user",
+        email: null,
+        pendingEmailAutomationId: null,
+      });
+    });
+
+    it("never fail a send because the contacts bookkeeping failed", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...gated, collectEmail: false },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      mockPrisma.contact.upsert.mockRejectedValue(new Error("contacts table locked"));
+
+      await getProcessor()(createMockJob());
+
+      expect(mockSendPrivateReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "comment_555",
+        LINK_TEXT
+      );
+    });
+  });
 });

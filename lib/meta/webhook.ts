@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { extractEmail } from "@/lib/utils/email";
 
 export function verifyWebhookSignature(
   payload: string,
@@ -83,6 +84,9 @@ interface WebhookEntry {
       is_deleted?: boolean;
       is_unsupported?: boolean;
       attachments?: Array<{ type?: string }>;
+      // Present when the message is a quick reply tap. For the email gate's
+      // `user_email` quick reply the text is the email from the profile.
+      quick_reply?: { payload?: string };
     };
   }>;
 }
@@ -92,6 +96,8 @@ export interface WebhookMessageEvent {
   messageId: string;
   messageText: string;
   senderId: string;
+  // Set only when the message came from tapping a quick reply.
+  fromQuickReply?: boolean;
 }
 
 export interface WebhookPostbackEvent {
@@ -233,6 +239,7 @@ export function parseMessageEvents(
         messageId,
         messageText: text,
         senderId,
+        ...(message.quick_reply ? { fromQuickReply: true } : {}),
       });
     }
   }
@@ -269,4 +276,40 @@ export function parseReadEvents(payload: WebhookPayload): WebhookReadEvent[] {
   }
 
   return events;
+}
+
+const REDACTED_EMAIL_MESSAGE = "(message with an email)";
+
+/**
+ * The copy of a webhook payload that is stored in WebhookEvent. DMs that
+ * carry an email (a reply to the email gate, typed or tapped from the
+ * one-tap button) lose their text, and quick replies their payload, so an
+ * email lives only on its Contact row, where deleting the contact removes
+ * it. Parsing always uses the original payload.
+ */
+export function redactEmailsForStorage<T extends WebhookPayload>(payload: T): T {
+  return {
+    ...payload,
+    entry: payload.entry.map((entry) =>
+      entry.messaging
+        ? {
+            ...entry,
+            messaging: entry.messaging.map((event) => {
+              const message = event.message;
+              if (!message) return event;
+              const hasEmail = Boolean(message.text && extractEmail(message.text));
+              if (!hasEmail && !message.quick_reply) return event;
+              return {
+                ...event,
+                message: {
+                  ...message,
+                  ...(hasEmail ? { text: REDACTED_EMAIL_MESSAGE } : {}),
+                  ...(message.quick_reply ? { quick_reply: {} } : {}),
+                },
+              };
+            }),
+          }
+        : entry
+    ),
+  };
 }

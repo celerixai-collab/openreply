@@ -80,7 +80,7 @@ export default function SettingsPage() {
   }
 
   async function disconnectInstagram(instagramAccountId: string) {
-    if (!confirm(t("Disconnect Instagram? Campaigns for this account will stop sending DMs."))) {
+    if (!confirm(t("Disconnect Instagram? Campaigns for this account will stop sending DMs, and the contacts and emails collected for it will be permanently deleted. Export them from Contacts first if you need them."))) {
       return;
     }
 

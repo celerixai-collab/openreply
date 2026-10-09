@@ -34,18 +34,29 @@ export function replaceUrlWithTrackedPlaceholder(
   return message.replace(withoutTrailingSlash, "{link}");
 }
 
+// {email} is filled in only when the caller passes an email (the email gate's
+// thanks message). Callers that pass nothing leave the text exactly as before.
+function renderEmail(message: string, email: string | null | undefined) {
+  return email === undefined
+    ? message
+    : message.replace(/\{email\}/gi, email ?? "");
+}
+
 /**
- * Personalize {username} and strip the {link} token — used when the link is
- * delivered as a separate button rather than inline in the message text.
+ * Personalize {username} (and {email}, when given) and strip the {link} token
+ * — used when the link is delivered as a separate button rather than inline
+ * in the message text.
  */
 export function renderMessageWithoutLink({
   message,
   commenterName,
+  email,
 }: {
   message: string;
   commenterName?: string | null;
+  email?: string | null;
 }) {
-  return message
+  return renderEmail(message, email)
     .replace(/\{username\}/gi, commenterName ?? "there")
     .replace(/\s*\{link\}\s*/gi, " ")
     .trim();
@@ -72,14 +83,19 @@ export function renderMessageWithTracking({
   trackedLinks,
   baseUrl,
   recipientToken,
+  email,
 }: {
   message: string;
   commenterName?: string | null;
   trackedLinks?: MessageTrackedLink[];
   baseUrl?: string;
   recipientToken?: string;
+  email?: string | null;
 }) {
-  let rendered = message.replace(/\{username\}/gi, commenterName ?? "there");
+  let rendered = renderEmail(message, email).replace(
+    /\{username\}/gi,
+    commenterName ?? "there"
+  );
   const primaryLink = trackedLinks?.[0];
 
   if (!primaryLink) return rendered;

@@ -10,6 +10,7 @@ import {
   parseCommentEvents,
   parseMessageEvents,
   parseReadEvents,
+  redactEmailsForStorage,
 } from "../lib/meta/webhook";
 import { createHmac } from "crypto";
 
@@ -378,6 +379,59 @@ describe("parseMessageEvents", () => {
     ]);
   });
 
+  it("should keep that a message came from a quick reply tap", () => {
+    const payload = messagingPayload([
+      {
+        sender: { id: "user_999" },
+        recipient: { id: "ig_456" },
+        message: {
+          mid: "mid_qr",
+          text: "leo@gmail.com",
+          quick_reply: { payload: "email_gate" },
+        },
+      },
+    ]);
+
+    expect(parseMessageEvents(payload)).toEqual([
+      {
+        instagramAccountId: "ig_456",
+        messageId: "mid_qr",
+        messageText: "leo@gmail.com",
+        senderId: "user_999",
+        fromQuickReply: true,
+      },
+    ]);
+  });
+
+  it("should not mark a typed message as a quick reply", () => {
+    const payload = messagingPayload([
+      {
+        sender: { id: "user_999" },
+        recipient: { id: "ig_456" },
+        message: { mid: "mid_typed", text: "leo@gmail.com" },
+      },
+    ]);
+
+    expect(parseMessageEvents(payload)[0]).not.toHaveProperty("fromQuickReply");
+  });
+
+  it("should still drop an echoed quick reply", () => {
+    const payload = messagingPayload([
+      {
+        sender: { id: "ig_456" },
+        recipient: { id: "user_999" },
+        message: {
+          mid: "mid_echo",
+          text: "leo@gmail.com",
+          is_echo: true,
+          quick_reply: { payload: "email_gate" },
+        },
+      },
+    ]);
+
+    expect(parseMessageEvents(payload)).toHaveLength(0);
+  });
+
   it("should ignore echoes of the account's own messages", () => {
     const payload = messagingPayload([
       {
@@ -513,5 +567,60 @@ describe("parseReadEvents", () => {
     };
 
     expect(parseReadEvents(payload)).toHaveLength(0);
+  });
+});
+
+describe("redactEmailsForStorage", () => {
+  const payload = {
+    object: "instagram",
+    entry: [
+      {
+        id: "ig_456",
+        time: 1,
+        messaging: [
+          {
+            sender: { id: "fan_1" },
+            message: { mid: "m1", text: "我的信箱 ａｂｃ＠ｇｍａｉｌ．ｃｏｍ" },
+          },
+          {
+            sender: { id: "fan_2" },
+            message: {
+              mid: "m2",
+              text: "leo@gmail.com",
+              quick_reply: { payload: "leo@gmail.com" },
+            },
+          },
+          { sender: { id: "fan_3" }, message: { mid: "m3", text: "LINK please" } },
+          { sender: { id: "fan_4" }, read: { watermark: 5 } },
+        ],
+      },
+      { id: "ig_456", time: 2, changes: [{ field: "comments", value: { text: "a@b.co" } }] },
+    ],
+  };
+
+  it("drops emails from stored DMs and keeps everything else", () => {
+    const stored = redactEmailsForStorage(payload);
+    const messaging = stored.entry[0].messaging!;
+
+    expect(messaging[0].message).toEqual({ mid: "m1", text: "(message with an email)" });
+    expect(messaging[1].message).toEqual({
+      mid: "m2",
+      text: "(message with an email)",
+      quick_reply: {},
+    });
+    expect(messaging[2]).toBe(payload.entry[0].messaging![2]);
+    expect(messaging[3]).toBe(payload.entry[0].messaging![3]);
+    // Comments are public and feed the ad-media lookup: left as they are.
+    expect(stored.entry[1]).toBe(payload.entry[1]);
+  });
+
+  it("never changes the payload the events are parsed from", () => {
+    const before = JSON.stringify(payload);
+    redactEmailsForStorage(payload);
+    expect(JSON.stringify(payload)).toBe(before);
+    expect(parseMessageEvents(payload)[1]).toMatchObject({
+      messageText: "leo@gmail.com",
+      fromQuickReply: true,
+    });
   });
 });

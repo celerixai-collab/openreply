@@ -366,6 +366,41 @@ export async function sendDirectMessage(
 }
 
 /**
+ * Send a plain-text direct message with Instagram's `user_email` quick reply:
+ * a button pre-filled with the email on the recipient's profile. Tapping it
+ * posts that email back as an ordinary message whose `quick_reply.payload` is
+ * `payload`. Meta does not show quick replies on desktop and hides this one
+ * when the profile has no email, so the text must work on its own.
+ */
+export async function sendDirectMessageWithEmailQuickReply(
+  accessToken: string,
+  instagramAccountId: string,
+  userId: string,
+  message: string,
+  payload: string
+): Promise<{ recipient_id: string; message_id: string }> {
+  const response = await fetch(
+    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        recipient: { id: userId },
+        message: {
+          text: message,
+          quick_replies: [{ content_type: "user_email", payload }],
+        },
+      }),
+    }
+  );
+
+  return handleResponse(response);
+}
+
+/**
  * Send a direct message as a button template with up to 3 web_url buttons —
  * the reveal message plus tappable link buttons (cleaner than inline URLs).
  */

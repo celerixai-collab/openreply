@@ -33,6 +33,7 @@ interface Campaign {
   requireFollow: boolean;
   followPromptMessage: string | null;
   followPromptButtonLabel: string | null;
+  collectEmail: boolean;
   isActive: boolean;
   wholeWordMatch: boolean;
   instagramAccountId: string;
@@ -44,7 +45,7 @@ interface Campaign {
   reportShareEnabled: boolean;
   reportUrl: string | null;
   createdAt: string;
-  _count: { dmLogs: number };
+  _count: { dmLogs: number; capturedContacts: number };
   trackedLinks: Array<{
     id: string;
     slug: string;
@@ -442,6 +443,11 @@ export default function CampaignsPage() {
                       {t("Follow gate")}
                     </span>
                   )}
+                  {auto.collectEmail && (
+                    <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+                      {t("Email gate")}
+                    </span>
+                  )}
                   {auto.trackedLinks.length >= 2 && (
                     <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
                       {t("2 links")}
@@ -488,6 +494,20 @@ export default function CampaignsPage() {
                   <span>{auto.analytics.failed} {t("failed")}</span>
                   <span>·</span>
                   <span>{auto.analytics.clicks} {t("clicks")}</span>
+                  {/* Shown while the gate is on, and afterwards too if it
+                      collected anything. */}
+                  {(auto.collectEmail || auto._count.capturedContacts > 0) && (
+                    <>
+                      <span>·</span>
+                      <Link
+                        href={`/contacts?campaign=${auto.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="font-medium text-foreground hover:underline"
+                      >
+                        {t("{count} emails collected", { count: auto._count.capturedContacts })}
+                      </Link>
+                    </>
+                  )}
                 </div>
 
                 {auto.analytics.topKeywords.length > 0 && (

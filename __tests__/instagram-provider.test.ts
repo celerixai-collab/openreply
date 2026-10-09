@@ -9,6 +9,8 @@ import {
   createInstagramContext,
   sendPrivateReplyWithButton,
   sendDirectMessageWithLinkButton,
+  sendDirectMessageWithEmailQuickReply,
+  supportsEmailQuickReply,
   getRecentMediaComments,
   getUserFollowStatus,
   getUserMedia,
@@ -89,6 +91,45 @@ describe("Instagram provider boundary", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).buttons[0].type).toBe(
       "url"
     );
+  });
+  it("sends Meta's user_email quick reply with the DM text", async () => {
+    respond({ recipient_id: "recipient", message_id: "mid" });
+    const meta = { provider: "META" as const, accessToken: "meta" };
+    expect(supportsEmailQuickReply(meta)).toBe(true);
+    await sendDirectMessageWithEmailQuickReply({
+      context: meta,
+      instagramAccountId: "ig",
+      userId: "recipient",
+      message: "留下你的 Email",
+    });
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      /^https:\/\/graph\.instagram\.com\/[^/]+\/ig\/messages$/
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      recipient: { id: "recipient" },
+      message: {
+        text: "留下你的 Email",
+        quick_replies: [{ content_type: "user_email", payload: "email_gate" }],
+      },
+    });
+  });
+  it("falls back to plain text where the provider has no quick replies", async () => {
+    respond({ data: { messageId: "mid" } });
+    expect(supportsEmailQuickReply(context)).toBe(false);
+    await sendDirectMessageWithEmailQuickReply({
+      context,
+      instagramAccountId: "ig",
+      userId: "recipient",
+      message: "留下你的 Email",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/conversations/recipient/messages"
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      accountId: "selected",
+      message: "留下你的 Email",
+    });
   });
   it("follows comment cursors and preserves owner replies", async () => {
     respond({
