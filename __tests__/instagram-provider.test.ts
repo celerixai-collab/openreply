@@ -96,7 +96,8 @@ describe("Instagram provider boundary", () => {
   it("sends Meta's user_email quick reply with the DM text", async () => {
     respond({ recipient_id: "recipient", message_id: "mid" });
     const meta = { provider: "META" as const, accessToken: "meta" };
-    expect(supportsEmailQuickReply(meta)).toBe(true);
+    // Meta rejects it in production, so the gate never offers it.
+    expect(supportsEmailQuickReply(meta)).toBe(false);
     await sendDirectMessageWithEmailQuickReply({
       context: meta,
       instagramAccountId: "ig",

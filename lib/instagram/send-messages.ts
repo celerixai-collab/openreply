@@ -220,9 +220,16 @@ export async function sendDirectMessage({
 // Its presence on an inbound message marks the email as tapped, not typed.
 export const EMAIL_QUICK_REPLY_PAYLOAD = "email_gate";
 
-/** Whether this provider can attach Instagram's `user_email` quick reply. */
-export function supportsEmailQuickReply(context: InstagramContext): boolean {
-  return context.provider === "META";
+/**
+ * Whether this provider can attach Instagram's `user_email` quick reply.
+ *
+ * Off for every provider: in production Meta rejected each ask carrying it
+ * with "Invalid message data" (code 100, subcode 2534015), so a button tap
+ * got neither the ask nor the link. The ask goes out as plain text, which
+ * the email gate has to accept anyway (desktop never shows quick replies).
+ */
+export function supportsEmailQuickReply(_context: InstagramContext): boolean {
+  return false;
 }
 
 /**

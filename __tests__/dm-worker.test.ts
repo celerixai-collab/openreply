@@ -2086,19 +2086,17 @@ describe("DM Worker — email gate", () => {
         })
       );
 
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledWith(
+      expect(mockSendDirectMessage).toHaveBeenCalledWith(
         "decrypted_token",
         "ig_456",
-        "commenter_999",
-        DEFAULT_EMAIL_PROMPT_MESSAGE,
-        "email_gate"
+        "commenter_999", defaultEmailPrompt(false)
       );
       // No link, and no usage reserved for one.
-      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
       expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
       expect(contacts[0]).toMatchObject({
         pendingEmailAutomationId: "auto_789",
-        pendingEmailPrompt: DEFAULT_EMAIL_PROMPT_MESSAGE,
+        pendingEmailPrompt: defaultEmailPrompt(false),
       });
     });
 
@@ -2185,14 +2183,12 @@ describe("DM Worker — email gate", () => {
 
       await getProcessor()(messageJob("can I get the LINK?"));
 
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledWith(
+      expect(mockSendDirectMessage).toHaveBeenCalledWith(
         "decrypted_token",
         "ig_456",
-        "commenter_999",
-        DEFAULT_EMAIL_PROMPT_MESSAGE,
-        "email_gate"
+        "commenter_999", defaultEmailPrompt(false)
       );
-      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
       expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
@@ -2215,7 +2211,7 @@ describe("DM Worker — email gate", () => {
 
       await getProcessor()(createMockPostbackJob());
 
-      const sent = mockSendDirectMessageWithEmailQuickReply.mock.calls[0][3];
+      const sent = mockSendDirectMessage.mock.calls[0][3];
       expect(new TextEncoder().encode(sent).length).toBeLessThanOrEqual(1000);
       expect(sent).not.toMatch(/�/);
       expect(contacts[0].pendingEmailPrompt).toBe(sent);
@@ -2361,7 +2357,7 @@ describe("DM Worker — email gate", () => {
         pendingEmailAutomationId: "auto_789",
         pendingEmailAttempts: 1,
       });
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
       expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
     });
 
@@ -2372,25 +2368,21 @@ describe("DM Worker — email gate", () => {
       await process(messageJob("我不想給", { messageId: "mid_1" }));
       expect(contacts[0].pendingEmailAttempts).toBe(1);
       // Not an email attempt: the ask again, with the one-tap button.
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenLastCalledWith(
+      expect(mockSendDirectMessage).toHaveBeenLastCalledWith(
         "decrypted_token",
         "ig_456",
-        "commenter_999",
-        DEFAULT_EMAIL_PROMPT_MESSAGE,
-        "email_gate"
+        "commenter_999", defaultEmailPrompt(false)
       );
 
       await process(messageJob("abc@gmail", { messageId: "mid_2" }));
       expect(contacts[0].pendingEmailAttempts).toBe(2);
       // Looks like a mistyped email: the invalid-email message.
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenLastCalledWith(
+      expect(mockSendDirectMessage).toHaveBeenLastCalledWith(
         "decrypted_token",
         "ig_456",
-        "commenter_999",
-        DEFAULT_EMAIL_INVALID_MESSAGE,
-        "email_gate"
+        "commenter_999", DEFAULT_EMAIL_INVALID_MESSAGE
       );
-      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(2);
       expect(contacts[0].pendingEmailSilenced).toBe(false);
     });
 
@@ -2505,7 +2497,7 @@ describe("DM Worker — email gate", () => {
       await process({ ...messageJob("hmm", { messageId: "mid_same" }), id: "again" });
 
       expect(contacts[0].pendingEmailAttempts).toBe(1);
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
     });
 
     it("delivers once when two email replies are handled at the same time", async () => {
@@ -2598,7 +2590,7 @@ describe("DM Worker — email gate", () => {
       await process(messageJob("LINK", { messageId: "mid_kw" }));
       await process({ ...messageJob("LINK", { messageId: "mid_kw" }), id: "redelivered" });
 
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
       expect(contacts[0]).toMatchObject({
         pendingEmailAutomationId: "auto_789",
         pendingEmailAttempts: 0,
@@ -2610,7 +2602,11 @@ describe("DM Worker — email gate", () => {
       const other = { ...mockAutomation, id: "auto_other", dmTriggerEnabled: true, collectEmail: false };
       mockPrisma.automation.findMany.mockResolvedValue([{ ...gated, dmTriggerEnabled: true }, other]);
       mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
-      mockSendDirectMessage.mockRejectedValueOnce(new Error("socket hang up"));
+      // The gated campaign's ask goes out first; the other campaign's link
+      // send is the one that fails.
+      mockSendDirectMessage
+        .mockResolvedValueOnce({ recipient_id: "commenter_999", message_id: "ask_mid" })
+        .mockRejectedValueOnce(new Error("socket hang up"));
       const process = getProcessor();
 
       await expect(process(messageJob("LINK", { messageId: "mid_two" }))).rejects.toThrow(
@@ -2620,12 +2616,17 @@ describe("DM Worker — email gate", () => {
 
       // The ask went out once and its gate survived; only the failed
       // campaign was retried.
-      expect(mockSendDirectMessageWithEmailQuickReply).toHaveBeenCalledTimes(1);
+      const asks = mockSendDirectMessage.mock.calls.filter(
+        (call) => call[3] === defaultEmailPrompt(false)
+      );
+      expect(asks).toHaveLength(1);
       expect(contacts[0]).toMatchObject({
         pendingEmailAutomationId: "auto_789",
         pendingEmailAttempts: 0,
       });
-      expect(directTexts()).toEqual([LINK_TEXT, LINK_TEXT]);
+      expect(
+        directTexts().filter((text) => text !== defaultEmailPrompt(false))
+      ).toEqual([LINK_TEXT, LINK_TEXT]);
       expect(logs.get("auto_other|dm:mid_two")).toMatchObject({ status: "SENT" });
     });
 
