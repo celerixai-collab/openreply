@@ -70,6 +70,15 @@ vi.mock("@/lib/db/client", () => ({
   prisma: mockPrisma,
 }));
 
+// The AI assistant's hook: processMessage hands it messages nothing else
+// answered. Its own conditions are covered in ai-trigger.test.ts.
+const { mockMaybeEnqueueAiDraft } = vi.hoisted(() => ({
+  mockMaybeEnqueueAiDraft: vi.fn(),
+}));
+vi.mock("@/lib/ai/trigger", () => ({
+  maybeEnqueueAiDraft: mockMaybeEnqueueAiDraft,
+}));
+
 vi.mock("@/lib/meta/client", () => ({
   sendPrivateReply: mockSendPrivateReply,
   sendPrivateReplyWithLinkButton: mockSendPrivateReplyWithLinkButton,
@@ -1193,6 +1202,51 @@ describe("DM Worker — DM keyword trigger", () => {
     );
   });
 
+  describe("AI draft hand-off", () => {
+    it("does not ask for an AI draft when a campaign matched", async () => {
+      await getProcessor()(createMockMessageJob());
+
+      expect(mockSendDirectMessage).toHaveBeenCalled();
+      expect(mockMaybeEnqueueAiDraft).not.toHaveBeenCalled();
+    });
+
+    it("does not ask for an AI draft when a matched campaign skips an already answered message", async () => {
+      mockPrisma.dmLog.findUnique.mockResolvedValue({ status: "SENT" });
+
+      await getProcessor()(createMockMessageJob());
+
+      expect(mockMaybeEnqueueAiDraft).not.toHaveBeenCalled();
+    });
+
+    it("hands an unmatched message to the AI assistant with its receive time", async () => {
+      mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+      const job = { ...createMockMessageJob({ messageText: "請問課程多少錢？" }), timestamp: 1_760_000_000_000 };
+
+      await getProcessor()(job);
+
+      expect(mockSendDirectMessage).not.toHaveBeenCalled();
+      expect(mockMaybeEnqueueAiDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "mid_abc", messageText: "請問課程多少錢？" }),
+        1_760_000_000_000
+      );
+    });
+
+    it("hands it over when the account has no DM campaigns at all", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([]);
+
+      await getProcessor()(createMockMessageJob({ messageText: "hi" }));
+
+      expect(mockMaybeEnqueueAiDraft).toHaveBeenCalledTimes(1);
+    });
+
+    it("never fails the campaign job when queueing the AI draft fails", async () => {
+      mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+      mockMaybeEnqueueAiDraft.mockRejectedValueOnce(new Error("redis down"));
+
+      await expect(getProcessor()(createMockMessageJob())).resolves.toBeUndefined();
+    });
+  });
+
   it("should release the usage reservation and rethrow when the send fails", async () => {
     mockSendDirectMessage.mockRejectedValue(new Error("Meta is down"));
 
@@ -2223,6 +2277,9 @@ describe("DM Worker — email gate", () => {
       openGate();
 
       await getProcessor()(messageJob("我的信箱是 Leo@Gmail.com 謝謝"));
+
+      // The gate answered the message, so the AI assistant never sees it.
+      expect(mockMaybeEnqueueAiDraft).not.toHaveBeenCalled();
 
       expect(contacts[0]).toMatchObject({
         email: "leo@gmail.com",

@@ -70,6 +70,7 @@ import {
 } from "@/lib/contacts/email-gate";
 
 import { ZernioApiError } from "@/lib/zernio/client";
+import { maybeEnqueueAiDraft } from "@/lib/ai/trigger";
 
 const BACKOFF_DELAYS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000];
 
@@ -1482,6 +1483,9 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     : messageText;
 
   let contactRecorded = false;
+  // Any campaign that matches owns the message, even one that then skips it
+  // (already replied, plan limit): the AI assistant only drafts for the rest.
+  let campaignMatched = false;
   for (const automation of automations) {
     const matchResult = automation.matchAnyWord
       ? { matched: true, matchedKeyword: null }
@@ -1492,6 +1496,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         );
 
     if (!matchResult.matched) continue;
+    campaignMatched = true;
 
     const existingLog = await prisma.dmLog.findUnique({
       where: {
@@ -1791,6 +1796,17 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         },
       });
       throw error;
+    }
+  }
+
+  // No email gate and no campaign answered it: the AI assistant may draft a
+  // reply for a person to approve. Never sends anything itself, and a
+  // failure here must not fail (and so retry) the campaign job.
+  if (!campaignMatched) {
+    try {
+      await maybeEnqueueAiDraft(job.data, job.timestamp ?? Date.now());
+    } catch (error) {
+      console.error("[DM Worker] Could not queue an AI draft:", formatError(error));
     }
   }
 }

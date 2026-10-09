@@ -86,6 +86,8 @@ model Workspace {
   webhookEvents     WebhookEvent[]
   operationalEvents OperationalEvent[]
   contacts          Contact[]
+  aiAssistants      AiAssistant[]
+  aiDrafts          AiDraft[]
 
   @@index([ownerId])
 }
@@ -146,6 +148,8 @@ model InstagramAccount {
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
   contacts    Contact[]
+  aiAssistant AiAssistant?
+  aiDrafts    AiDraft[]
 
   @@index([workspaceId])
 }
@@ -293,11 +297,89 @@ model Contact {
   workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
   emailAutomation  Automation?      @relation("ContactEmailAutomation", fields: [emailAutomationId], references: [id], onDelete: SetNull)
+  aiDrafts         AiDraft[]
 
   @@unique([instagramAccountId, igsid])
   @@index([workspaceId, emailCapturedAt])
   @@index([workspaceId, email])
   @@index([emailAutomationId])
+}
+
+/// The AI DM assistant of one connected Instagram account. In "draft" mode
+/// (the only mode in v1) it writes a suggested reply to an inbound DM and
+/// nothing is sent until someone approves it on the AI Assistant page.
+model AiAssistant {
+  id                     String   @id @default(cuid())
+  workspaceId            String
+  /// Internal InstagramAccount.id. One assistant per account.
+  instagramAccountId     String   @unique
+  enabled                Boolean  @default(false)
+  mode                   String   @default("draft")
+  model                  String   @default("claude-haiku-5-5")
+  /// Who the assistant speaks for, how it sounds, what it must not do, and
+  /// the facts it may use. All of it goes into the system prompt.
+  role                   String   @default("")
+  voice                  String   @default("")
+  guardrails             String   @default("")
+  knowledge              String   @default("")
+  /// Put in front of the first AI reply a person receives.
+  disclosureText         String   @default("（我是 AI 小助理，訊息經過本人確認後送出）")
+  /// Drafts one person can trigger in 24 hours; later messages get none.
+  dailyDraftCapPerPerson Int      @default(10)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+/// One AI-written reply waiting for (or past) a decision. Emails in the
+/// inbound text and the history are masked before anything is stored or sent
+/// to the model.
+model AiDraft {
+  id                 String        @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+  contactId          String?
+  igsid              String
+  username           String?
+  /// The newest inbound message this draft answers (the burst's last one).
+  inboundMessageId   String
+  /// The burst of messages this draft answers, oldest first, one per line.
+  inboundText        String
+  inboundAt          DateTime
+  /// The conversation turns given to the model: [{ from, text, at }].
+  historySnapshot    Json
+  draftText          String        @default("")
+  intent             String?
+  needsHuman         Boolean       @default(false)
+  handoffReason      String?
+  language           String?
+  confidence         String?
+  status             AiDraftStatus @default(PENDING)
+  /// The exact text sent (with the disclosure when it was the first reply).
+  finalText          String?
+  error              String?
+  model              String
+  inputTokens        Int?
+  outputTokens       Int?
+  cacheReadTokens    Int?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  decidedAt          DateTime?
+  sentAt             DateTime?
+  sentMessageId      String?
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  contact          Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([instagramAccountId, inboundMessageId])
+  @@index([workspaceId, status, createdAt])
+  @@index([instagramAccountId, igsid, createdAt])
+  @@index([contactId])
 }
 
 model DmLog {
@@ -456,6 +538,16 @@ enum DmStatus {
   SKIPPED_RATE_LIMIT
   SKIPPED_PLAN_LIMIT
   SKIPPED_NO_MATCH
+}
+
+enum AiDraftStatus {
+  PENDING
+  SENDING
+  SENT
+  DISMISSED
+  EXPIRED
+  FAILED
+  SUPERSEDED
 }
 
 enum WebhookStatus {

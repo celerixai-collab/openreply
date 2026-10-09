@@ -681,6 +681,28 @@ export async function getConversations(
 }
 
 /**
+ * The id of the conversation between the account and one person (their
+ * Instagram-scoped id), or null when Meta has none. Conversations API
+ * "Find a conversation with a specific person": `user_id` on /conversations.
+ */
+export async function findConversationWithUser(
+  accessToken: string,
+  igUserId: string,
+  userId: string
+): Promise<string | null> {
+  const url = new URL(`${instagramGraphBase()}/${igUserId}/conversations`);
+  url.searchParams.set("platform", "instagram");
+  url.searchParams.set("user_id", userId);
+  const data = await handleResponse<{ data?: { id: string }[] }>(
+    await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+  );
+  return data.data?.[0]?.id ?? null;
+}
+
+/**
  * The messages in a conversation, with content. Meta only returns full details
  * for the 20 most recent messages, newest first.
  */
