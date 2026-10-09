@@ -2,9 +2,15 @@ import { createDMWorker } from "@/lib/queue/dm-worker";
 import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
+import { createAiWorker } from "@/lib/ai/worker";
+import { isAiConfigured } from "@/lib/ai/client";
+import { expireStaleAiDrafts } from "@/lib/ai/drafts";
 import os from "node:os";
 
 const worker = createDMWorker();
+// AI DM assistant (draft mode). Its jobs are only queued for accounts that
+// turned the assistant on, and only while ANTHROPIC_API_KEY is set here.
+const aiWorker = createAiWorker();
 const startedAt = new Date().toISOString();
 const HEARTBEAT_INTERVAL_MS = 30_000;
 // Polling safety net for comments that webhooks miss. Runs in the worker because
@@ -21,6 +27,7 @@ async function heartbeat() {
       pid: process.pid,
       hostname: os.hostname(),
       startedAt,
+      aiConfigured: isAiConfigured(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -42,6 +49,13 @@ async function poll() {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[DM Worker] Comment reconciliation failed:", message);
   }
+  try {
+    // AI drafts past Instagram's 24-hour window can no longer be sent.
+    await expireStaleAiDrafts();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[DM Worker] Expiring AI drafts failed:", message);
+  }
 }
 
 // Kick off one sweep shortly after boot, then on a fixed interval.
@@ -52,7 +66,7 @@ async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
-  await worker.close();
+  await Promise.all([worker.close(), aiWorker.close()]);
   process.exit(0);
 }
 

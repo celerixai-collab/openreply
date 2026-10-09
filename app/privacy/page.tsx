@@ -43,6 +43,23 @@ export default function PrivacyPage() {
       </section>
 
       <section>
+        <h2 className="text-xl font-bold text-white">AI Reply Drafts</h2>
+        <p className="mt-3">
+          When a business turns on the AI assistant for a connected Instagram
+          account, the text of direct messages that no campaign answered, the
+          recent conversation with that person (up to the last 20 messages),
+          and the business&apos;s own assistant settings are sent to Anthropic
+          (Claude) to draft a suggested reply. Email addresses in those
+          messages are masked before anything is sent. Anthropic processes this
+          data under its commercial terms, which do not allow it to train
+          models on it. Drafts are stored with the business&apos;s workspace and
+          nothing is sent to the person until someone at the business approves
+          it. The assistant is off unless the business turns it on, and turning
+          it off stops any further messages from being sent to Anthropic.
+        </p>
+      </section>
+
+      <section>
         <h2 className="text-xl font-bold text-white">How We Use Data</h2>
         <p className="mt-3">
           We use this data to authenticate users, connect Instagram
@@ -67,8 +84,8 @@ export default function PrivacyPage() {
         <p className="mt-3">
           The production service may use hosting, database, Redis queue, email,
           and observability providers such as Vercel, Railway, PostgreSQL,
-          Redis, and Resend. These providers process data only as needed to run
-          the service.
+          Redis, and Resend, and Anthropic when the AI assistant is turned on.
+          These providers process data only as needed to run the service.
         </p>
       </section>
 

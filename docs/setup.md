@@ -118,6 +118,12 @@ Copy `.env.example` to `.env` for local work, or set these in Vercel and Railway
 | `FACEBOOK_APP_SECRET` | From the Meta app. |
 | `WEBHOOK_VERIFY_TOKEN` | Any random string. You paste the same value into Meta's webhook config. |
 
+**AI DM assistant (optional, worker only):**
+
+| Variable | What it is |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Set on the worker only. Lets the AI Assistant page write draft replies (Claude Haiku 5.5) to DMs no campaign answered; nothing is sent until someone approves a draft. The web app does not need it. |
+
 `ENCRYPTION_KEY` must be exactly 64 hex characters or the app throws on boot.
 
 Optional, for tuning the polling reconciler (defaults are fine to start):

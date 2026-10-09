@@ -10,6 +10,10 @@ export interface WorkerHeartbeat {
   pid: number;
   hostname?: string;
   startedAt?: string;
+  // Whether ANTHROPIC_API_KEY is set on the worker (never the key itself),
+  // so the web app can say "no AI key" without holding the key. Absent on
+  // workers older than the AI assistant.
+  aiConfigured?: boolean;
   checkedAt: string;
 }
 
