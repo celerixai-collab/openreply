@@ -66,7 +66,9 @@ function ContactsList() {
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [hasEmail, setHasEmail] = useState(true);
+  // Everyone by default; a campaign's "N emails collected" link opens the
+  // email list.
+  const [hasEmail, setHasEmail] = useState(Boolean(campaign));
   const [page, setPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +128,25 @@ function ContactsList() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [fetchContacts]);
+
+  // Once per browser session, add the commenters campaigns replied to before
+  // contacts were recorded (DM logs); refetch if anyone new came in.
+  useEffect(() => {
+    if (!canManage) return;
+    const key = "openreply:contacts-backfill";
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+    } catch {
+      // Storage blocked: run anyway, the import is idempotent.
+    }
+    void fetch("/api/contacts/backfill", { method: "POST" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && data.data.created > 0) void fetchContacts();
+      })
+      .catch(() => {});
+  }, [canManage, fetchContacts]);
 
   function toggleHasEmail() {
     setLoading(true);
