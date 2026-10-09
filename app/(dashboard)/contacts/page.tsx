@@ -11,13 +11,25 @@ import { useI18n } from "@/lib/i18n/provider";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { contactSource } from "@/lib/contacts/list";
 
 interface Contact {
   id: string;
   username: string | null;
+  name: string | null;
+  followsYou: boolean | null;
   email: string | null;
   emailCapturedAt: string | null;
   emailSource: string | null;
+  emailSourceType: string | null;
+  emailSourceText: string | null;
+  emailSourceMediaId: string | null;
+  emailSourceKeyword: string | null;
+  emailOptedOutAt: string | null;
+  lastTriggerType: string | null;
+  lastTriggerText: string | null;
+  lastTriggerMediaId: string | null;
+  lastTriggerKeyword: string | null;
   lastInteractionAt: string;
   emailAutomation: { id: string; name: string } | null;
   instagramAccount: { username: string };
@@ -167,6 +179,13 @@ function ContactsList() {
       : source === "typed"
         ? t("Typed")
         : "—";
+  const describeSource = (contact: Contact) => {
+    const { type, text } = contactSource(contact);
+    return {
+      label: type === "comment" ? t("Comment") : type === "dm" ? t("DM") : null,
+      text,
+    };
+  };
 
   return (
     <div className="space-y-6">
@@ -300,13 +319,37 @@ function ContactsList() {
                         <span className="block font-medium text-foreground">
                           {contact.username ? `@${contact.username}` : "—"}
                         </span>
+                        {contact.name && (
+                          <span className="block text-xs text-foreground/80">{contact.name}</span>
+                        )}
+                        {contact.followsYou !== null && (
+                          <span
+                            className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                              contact.followsYou
+                                ? "bg-accent/10 text-accent"
+                                : "bg-surface-hover text-muted"
+                            }`}
+                          >
+                            {contact.followsYou ? t("Follows you") : t("Not following")}
+                          </span>
+                        )}
                         <span className="block text-xs text-muted">
                           {t("via @{account}", { account: contact.instagramAccount.username })}
                         </span>
                       </td>
                       <td className="px-4 py-4 sm:px-6">
                         {contact.email ? (
-                          <span className="select-all break-all text-foreground">{contact.email}</span>
+                          <>
+                            <span className="select-all break-all text-foreground">{contact.email}</span>
+                            {contact.emailOptedOutAt && (
+                              <span
+                                title={t("Asked by DM not to be emailed")}
+                                className="mt-1 block w-fit rounded bg-error/10 px-1.5 py-0.5 text-[11px] font-medium text-error"
+                              >
+                                {t("Unsubscribed")}
+                              </span>
+                            )}
+                          </>
                         ) : (
                           <span className="text-muted">—</span>
                         )}
@@ -333,8 +376,11 @@ function ContactsList() {
                             })
                           : "—"}
                       </td>
-                      <td className="px-4 py-4 text-muted whitespace-nowrap sm:px-6">
-                        {sourceLabel(contact.emailSource)}
+                      <td className="px-4 py-4 text-muted sm:px-6">
+                        <span className="block whitespace-nowrap">
+                          {sourceLabel(contact.emailSource)}
+                        </span>
+                        <SourceText {...describeSource(contact)} />
                       </td>
                       <td className="px-4 py-4 text-right sm:px-6">
                         {canManage && (
@@ -394,5 +440,20 @@ function ContactsList() {
         </div>
       )}
     </div>
+  );
+}
+
+// The comment or DM behind the contact, cut to one line; the full text is in
+// the tooltip.
+function SourceText({ label, text }: { label: string | null; text: string | null }) {
+  if (!text) return null;
+  return (
+    <span
+      title={text}
+      className="block max-w-[14rem] truncate text-xs text-muted"
+    >
+      {label ? `${label}: ` : ""}
+      {text}
+    </span>
   );
 }

@@ -7,6 +7,7 @@ const {
   mockSendPrivateReplyWithLinkButton,
   mockSendPrivateReplyWithButton,
   mockGetUserFollowStatus,
+  mockGetUserProfile,
   mockSendDirectMessageWithButton,
   mockSendDirectMessage,
   mockSendDirectMessageWithLinkButton,
@@ -51,6 +52,7 @@ const {
   mockSendPrivateReplyWithLinkButton: vi.fn(),
   mockSendPrivateReplyWithButton: vi.fn(),
   mockGetUserFollowStatus: vi.fn(),
+  mockGetUserProfile: vi.fn(),
   mockSendDirectMessageWithButton: vi.fn(),
   mockSendDirectMessage: vi.fn(),
   mockSendDirectMessageWithLinkButton: vi.fn(),
@@ -73,6 +75,7 @@ vi.mock("@/lib/meta/client", () => ({
   sendPrivateReplyWithLinkButton: mockSendPrivateReplyWithLinkButton,
   sendPrivateReplyWithButton: mockSendPrivateReplyWithButton,
   getUserFollowStatus: mockGetUserFollowStatus,
+  getUserProfile: mockGetUserProfile,
   sendDirectMessageWithButton: mockSendDirectMessageWithButton,
   sendDirectMessage: mockSendDirectMessage,
   sendDirectMessageWithLinkButton: mockSendDirectMessageWithLinkButton,
@@ -153,9 +156,11 @@ import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
 import {
   DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_OPT_OUT_MESSAGE,
   DEFAULT_EMAIL_PROMPT_MESSAGE,
   defaultEmailPrompt,
 } from "@/lib/contacts/email-copy";
+import { isEmailOptOutMessage } from "@/lib/contacts/email-gate";
 
 const usagePeriodStart = new Date("2026-05-01T00:00:00.000Z");
 
@@ -315,6 +320,7 @@ beforeEach(() => {
     message_id: "msg_007",
   });
   mockGetUserFollowStatus.mockResolvedValue(true);
+  mockGetUserProfile.mockReset().mockResolvedValue(null);
 });
 
 describe("DM Worker — comments left on an ad", () => {
@@ -1798,11 +1804,25 @@ describe("DM Worker — email gate", () => {
     instagramAccountId: string;
     igsid: string;
     username: string | null;
+    name: string | null;
+    followerCount: number | null;
+    followsYou: boolean | null;
+    profileCheckedAt: Date | null;
+    lastTriggerType: string | null;
+    lastTriggerText: string | null;
+    lastTriggerMediaId: string | null;
+    lastTriggerKeyword: string | null;
+    lastTriggerAt: Date | null;
     email: string | null;
     emailCapturedAt: Date | null;
     emailAutomationId: string | null;
     emailSource: string | null;
     emailConsentText: string | null;
+    emailSourceType: string | null;
+    emailSourceText: string | null;
+    emailSourceMediaId: string | null;
+    emailSourceKeyword: string | null;
+    emailOptedOutAt: Date | null;
     pendingEmailAutomationId: string | null;
     pendingEmailPrompt: string | null;
     pendingEmailAttempts: number;
@@ -1857,11 +1877,25 @@ describe("DM Worker — email gate", () => {
       instagramAccountId: "ig_account_row_1",
       igsid: "commenter_999",
       username: "commenter_user",
+      name: null,
+      followerCount: null,
+      followsYou: null,
+      profileCheckedAt: null,
+      lastTriggerType: null,
+      lastTriggerText: null,
+      lastTriggerMediaId: null,
+      lastTriggerKeyword: null,
+      lastTriggerAt: null,
       email: null,
       emailCapturedAt: null,
       emailAutomationId: null,
       emailSource: null,
       emailConsentText: null,
+      emailSourceType: null,
+      emailSourceText: null,
+      emailSourceMediaId: null,
+      emailSourceKeyword: null,
+      emailOptedOutAt: null,
       pendingEmailAutomationId: null,
       pendingEmailPrompt: null,
       pendingEmailAttempts: 0,
@@ -2760,6 +2794,278 @@ describe("DM Worker — email gate", () => {
         "comment_555",
         LINK_TEXT
       );
+    });
+  });
+
+  describe("what brought each contact in", () => {
+    it("records the matching comment, its post and keyword", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([{ ...gated, collectEmail: false }]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(createMockJob());
+
+      expect(contacts[0]).toMatchObject({
+        lastTriggerType: "comment",
+        lastTriggerText: "I want the LINK!",
+        lastTriggerMediaId: "media_101",
+        lastTriggerKeyword: "LINK",
+      });
+      expect(contacts[0].lastTriggerAt).toBeInstanceOf(Date);
+    });
+
+    it("records a matching DM without its post, and never with an email in it", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...mockAutomation, dmTriggerEnabled: true, collectEmail: false },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      const process = getProcessor();
+
+      await process(messageJob("LINK please", { messageId: "mid_a" }));
+      expect(contacts[0]).toMatchObject({
+        lastTriggerType: "dm",
+        lastTriggerText: "LINK please",
+        lastTriggerMediaId: null,
+        lastTriggerKeyword: "LINK",
+      });
+
+      await process(messageJob("LINK pls, me@example.com", { messageId: "mid_b" }));
+      expect(contacts[0].lastTriggerText).toBe("(message with an email)");
+      expect(JSON.stringify(contacts)).not.toContain("me@example.com");
+    });
+
+    it("snapshots the comment that opened the gate as the email's source", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([gated]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      const process = getProcessor();
+      await process(createMockJob());
+
+      // The email reply goes to the gate, never to the trigger bookkeeping.
+      mockPrisma.automation.findMany.mockResolvedValue([]);
+      await process(messageJob("leo@gmail.com"));
+
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        emailSourceType: "comment",
+        emailSourceText: "I want the LINK!",
+        emailSourceMediaId: "media_101",
+        emailSourceKeyword: "LINK",
+        lastTriggerText: "I want the LINK!",
+      });
+    });
+
+    it("snapshots the DM keyword trigger as the email's source", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([{ ...gated, dmTriggerEnabled: true }]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      const process = getProcessor();
+      await process(messageJob("LINK", { messageId: "mid_kw" }));
+
+      mockMatchKeywords.mockReturnValue({ matched: false, matchedKeyword: null });
+      await process(messageJob("leo@gmail.com", { messageId: "mid_email" }));
+
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        emailSourceType: "dm",
+        emailSourceText: "LINK",
+        emailSourceMediaId: null,
+        emailSourceKeyword: "LINK",
+      });
+    });
+  });
+
+  describe("profile enrichment", () => {
+    it("reads the profile once the email is in, after the link went out", async () => {
+      mockGetUserProfile.mockResolvedValue({
+        name: "Leo 李",
+        username: "other_name",
+        followerCount: 1234,
+        followsYou: true,
+      });
+      openGate();
+
+      await getProcessor()(messageJob("leo@gmail.com"));
+
+      expect(mockGetUserProfile).toHaveBeenCalledTimes(1);
+      expect(mockGetUserProfile).toHaveBeenCalledWith("decrypted_token", "commenter_999");
+      const linkCall = mockSendDirectMessage.mock.calls.findIndex((call) => call[3] === LINK_TEXT);
+      expect(mockSendDirectMessage.mock.invocationCallOrder[linkCall]).toBeLessThan(
+        mockGetUserProfile.mock.invocationCallOrder[0]
+      );
+      expect(contacts[0]).toMatchObject({
+        name: "Leo 李",
+        // The comment webhook's username is kept.
+        username: "commenter_user",
+        followerCount: 1234,
+        followsYou: true,
+        pendingEmailAutomationId: null,
+      });
+      expect(contacts[0].profileCheckedAt).toBeInstanceOf(Date);
+    });
+
+    it("never holds up or fails the delivery when the lookup fails", async () => {
+      mockGetUserProfile.mockRejectedValue(new Error("graph down"));
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      openGate();
+
+      await getProcessor()(messageJob("leo@gmail.com"));
+
+      expect(directTexts()).toEqual(["收到 leo@gmail.com ✅ 連結馬上傳給你！", LINK_TEXT]);
+      expect(contacts[0]).toMatchObject({
+        email: "leo@gmail.com",
+        name: null,
+        profileCheckedAt: null,
+        pendingEmailAutomationId: null,
+      });
+    });
+
+    it("still looks the profile up when the link could not be sent", async () => {
+      mockGetUserProfile.mockResolvedValue({
+        name: "Leo",
+        username: null,
+        followerCount: null,
+        followsYou: null,
+      });
+      mockSendDirectMessage.mockImplementation(
+        async (_token: string, _account: string, _user: string, text: string) => {
+          if (text === LINK_TEXT) throw new RateLimitError("slow down");
+          return { recipient_id: "commenter_999", message_id: "msg" };
+        }
+      );
+      openGate();
+
+      await expect(getProcessor()(messageJob("leo@gmail.com"))).rejects.toThrow("slow down");
+
+      expect(contacts[0]).toMatchObject({ name: "Leo", pendingEmailAutomationId: "auto_789" });
+    });
+
+    it("records the follow gate's own check, but not an unknown answer", async () => {
+      mockPrisma.automation.findMany.mockResolvedValue([
+        { ...gated, collectEmail: false, requireFollow: true },
+      ]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+      mockGetUserFollowStatus.mockResolvedValue(false);
+      const process = getProcessor();
+
+      await process(createMockJob());
+      expect(contacts[0]).toMatchObject({ followsYou: false });
+      expect(contacts[0].profileCheckedAt).toBeInstanceOf(Date);
+
+      mockGetUserFollowStatus.mockResolvedValue(null);
+      await process(createMockJob({ ...mockJobData, commentId: "comment_556" }));
+      expect(contacts[0].followsYou).toBe(false);
+      // No extra profile lookups outside the email capture.
+      expect(mockGetUserProfile).not.toHaveBeenCalled();
+    });
+
+    it("records a follow confirmed on a button tap", async () => {
+      seedContact();
+      mockPrisma.automation.findFirst.mockResolvedValue({
+        ...gated,
+        collectEmail: false,
+        requireFollow: true,
+      });
+      mockGetUserFollowStatus.mockResolvedValue(true);
+
+      await getProcessor()(
+        createMockPostbackJob({
+          instagramAccountId: "ig_456",
+          userId: "commenter_999",
+          payload: "followcheck:auto_789",
+          mid: "tap_follow",
+        })
+      );
+
+      expect(contacts[0].followsYou).toBe(true);
+    });
+  });
+
+  describe("unsubscribing by DM", () => {
+    const anyWord = {
+      ...mockAutomation,
+      id: "auto_any",
+      dmTriggerEnabled: true,
+      matchAnyWord: true,
+      keywords: [],
+    };
+
+    beforeEach(() => {
+      mockPrisma.instagramAccount.findUnique.mockResolvedValue({
+        ...mockAutomation.instagramAccount,
+        workspaceId: "workspace_123",
+      });
+      // A match-any-word campaign would answer every message handed on.
+      mockPrisma.automation.findMany.mockResolvedValue([anyWord]);
+    });
+
+    it.each(["退訂", "  退訂！", "取消訂閱", "取消订阅", "退订 🙏", "Unsubscribe.", "STOP", "ｓｔｏｐ!!", "cancelar ❤️"])(
+      "reads %j as an unsubscribe",
+      (text) => {
+        expect(isEmailOptOutMessage(text)).toBe(true);
+      }
+    );
+
+    it.each(["please stop sending", "stop?? link", "退訂怎麼用", "", "stopp"])(
+      "does not read %j as an unsubscribe",
+      (text) => {
+        expect(isEmailOptOutMessage(text)).toBe(false);
+      }
+    );
+
+    it("opts out, confirms once, and keeps the keyword campaigns out of it", async () => {
+      seedContact({ email: "leo@gmail.com", emailCapturedAt: new Date() });
+
+      await getProcessor()(messageJob("退訂！", { messageId: "mid_stop" }));
+
+      expect(contacts[0].emailOptedOutAt).toBeInstanceOf(Date);
+      expect(directTexts()).toEqual([DEFAULT_EMAIL_OPT_OUT_MESSAGE]);
+      expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
+    });
+
+    it("does not confirm twice when the message is redelivered", async () => {
+      seedContact({ email: "leo@gmail.com", emailCapturedAt: new Date() });
+      const process = getProcessor();
+
+      await process(messageJob("stop", { messageId: "mid_stop" }));
+      const optedOutAt = contacts[0].emailOptedOutAt;
+      await process({ ...messageJob("stop", { messageId: "mid_stop" }), id: "redelivered" });
+      await process({ ...messageJob("stop", { messageId: "mid_stop" }), attemptsMade: 1 });
+
+      expect(directTexts()).toEqual([DEFAULT_EMAIL_OPT_OUT_MESSAGE]);
+      expect(contacts[0].emailOptedOutAt).toBe(optedOutAt);
+      expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
+    });
+
+    it("keeps the opt-out when the confirmation cannot be sent", async () => {
+      seedContact({ email: "leo@gmail.com", emailCapturedAt: new Date() });
+      mockSendDirectMessage.mockRejectedValue(new Error("socket hang up"));
+      vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await getProcessor()(messageJob("unsubscribe"));
+
+      expect(contacts[0].emailOptedOutAt).toBeInstanceOf(Date);
+    });
+
+    it("hands the message on unchanged to someone without an email", async () => {
+      seedContact();
+
+      await getProcessor()(messageJob("stop", { messageId: "mid_stop" }));
+
+      expect(contacts[0].emailOptedOutAt).toBeNull();
+      expect(directTexts()).not.toContain(DEFAULT_EMAIL_OPT_OUT_MESSAGE);
+      expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { automationId_commentId: { automationId: "auto_any", commentId: "dm:mid_stop" } },
+          create: expect.objectContaining({ status: "SENT" }),
+        })
+      );
+    });
+
+    it("lets a sentence that only mentions stopping reach the campaigns", async () => {
+      seedContact({ email: "leo@gmail.com", emailCapturedAt: new Date() });
+
+      await getProcessor()(messageJob("don't stop the giveaway!", { messageId: "mid_x" }));
+
+      expect(contacts[0].emailOptedOutAt).toBeNull();
+      expect(directTexts()).not.toContain(DEFAULT_EMAIL_OPT_OUT_MESSAGE);
     });
   });
 });

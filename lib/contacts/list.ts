@@ -74,6 +74,18 @@ export const CONTACT_LIST_SELECT = {
   emailCapturedAt: true,
   emailSource: true,
   emailConsentText: true,
+  emailSourceType: true,
+  emailSourceText: true,
+  emailSourceMediaId: true,
+  emailSourceKeyword: true,
+  emailOptedOutAt: true,
+  lastTriggerType: true,
+  lastTriggerText: true,
+  lastTriggerMediaId: true,
+  lastTriggerKeyword: true,
+  name: true,
+  followsYou: true,
+  followerCount: true,
   firstSeenAt: true,
   lastInteractionAt: true,
   emailAutomation: { select: { id: true, name: true } },
@@ -84,7 +96,41 @@ export type ContactListItem = Prisma.ContactGetPayload<{
   select: typeof CONTACT_LIST_SELECT;
 }>;
 
+type SourceFields = {
+  email: string | null;
+  emailSourceType: string | null;
+  emailSourceText: string | null;
+  emailSourceMediaId: string | null;
+  emailSourceKeyword: string | null;
+  lastTriggerType: string | null;
+  lastTriggerText: string | null;
+  lastTriggerMediaId: string | null;
+  lastTriggerKeyword: string | null;
+};
+
+/**
+ * The comment or DM behind a contact, as the page and the CSV show it: for
+ * an email, the trigger that led to it (unknown for emails captured before
+ * it was recorded); for someone without one, what they last sent.
+ */
+export function contactSource(contact: SourceFields) {
+  return contact.email
+    ? {
+        type: contact.emailSourceType,
+        text: contact.emailSourceText,
+        mediaId: contact.emailSourceMediaId,
+        keyword: contact.emailSourceKeyword,
+      }
+    : {
+        type: contact.lastTriggerType,
+        text: contact.lastTriggerText,
+        mediaId: contact.lastTriggerMediaId,
+        keyword: contact.lastTriggerKeyword,
+      };
+}
+
 export function toContactCsvRow(contact: ContactListItem): ContactCsvRow {
+  const source = contactSource(contact);
   return {
     username: contact.username,
     email: contact.email,
@@ -93,5 +139,13 @@ export function toContactCsvRow(contact: ContactListItem): ContactCsvRow {
     instagramAccount: contact.instagramAccount.username,
     emailSource: contact.emailSource,
     consentText: contact.emailConsentText,
+    name: contact.name,
+    followsYou: contact.followsYou,
+    followerCount: contact.followerCount,
+    sourceType: source.type,
+    sourceText: source.text,
+    sourceMediaId: source.mediaId,
+    sourceKeyword: source.keyword,
+    optedOutAt: contact.emailOptedOutAt,
   };
 }

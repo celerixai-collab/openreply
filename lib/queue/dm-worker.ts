@@ -52,7 +52,10 @@ import {
 } from "@/lib/tracking/message";
 import { TRACKED_LINK_ORDER } from "@/lib/tracking/link-order";
 import { hashRecipientId } from "@/lib/tracking/server";
-import { recordContactInteraction } from "@/lib/contacts/contacts";
+import {
+  recordContactInteraction,
+  recordFollowStatus,
+} from "@/lib/contacts/contacts";
 import { extractEmail } from "@/lib/utils/email";
 import {
   buildEmailAsk,
@@ -381,7 +384,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
-    // One commenter, one account per job: record them once. Never throws.
+    // One commenter, one account per job: record them once, with the
+    // comment that matched. Never throws.
     if (!contactRecorded) {
       contactRecorded = true;
       await recordContactInteraction({
@@ -389,6 +393,12 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         instagramAccountId: automation.instagramAccountId,
         igsid: commenterId,
         username: commenterName,
+        trigger: {
+          type: "comment",
+          text: commentText,
+          mediaId,
+          keyword: matchResult.matchedKeyword,
+        },
       });
     }
 
@@ -670,6 +680,11 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       const alreadyFollows = await getUserFollowStatus({
         context: accessToken,
         recipientId: commenterId,
+      });
+      await recordFollowStatus({
+        instagramAccountId: automation.instagramAccountId,
+        igsid: commenterId,
+        followsYou: alreadyFollows,
       });
       sendFollowPrompt =
         accessToken.provider === "ZERNIO"
@@ -1211,6 +1226,11 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
       context: accessToken,
       recipientId: userId,
     });
+    await recordFollowStatus({
+      instagramAccountId: automation.instagramAccountId,
+      igsid: userId,
+      followsYou: follows,
+    });
     // A read fallback needs a confirmed follow. Instagram only reports follow
     // status once the person has tapped a button (before that it answers
     // "User consent is required", i.e. null), so failing open here handed the
@@ -1455,6 +1475,11 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   if (handledByEmailGate) return;
 
   const dedupeId = `dm:${messageId}`;
+  // An email typed into a DM stays out of the logs and the contact's trigger:
+  // the Contacts page is where emails live, and where deleting one removes it.
+  const recordedText = extractEmail(messageText)
+    ? "(message with an email)"
+    : messageText;
 
   let contactRecorded = false;
   for (const automation of automations) {
@@ -1487,13 +1512,20 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       continue;
     }
 
-    // A DM carries no username, so this only records the interaction.
+    // A DM carries no username, so this records the interaction and the
+    // message that matched.
     if (!contactRecorded) {
       contactRecorded = true;
       await recordContactInteraction({
         workspaceId: automation.workspaceId,
         instagramAccountId: automation.instagramAccountId,
         igsid: senderId,
+        trigger: {
+          type: "dm",
+          text: recordedText,
+          mediaId: null,
+          keyword: matchResult.matchedKeyword,
+        },
       });
     }
 
@@ -1502,9 +1534,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       automationId: automation.id,
       instagramAccountId: automation.instagramAccountId,
       commenterId: senderId,
-      // An email typed into a DM stays out of the logs: the Contacts page is
-      // where emails live, and where deleting one removes it.
-      commentText: extractEmail(messageText) ? "(message with an email)" : messageText,
+      commentText: recordedText,
       commentId: dedupeId,
       matchedKeyword: matchResult.matchedKeyword,
     };
@@ -1577,6 +1607,11 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       const follows = await getUserFollowStatus({
         context: accessToken,
         recipientId: senderId,
+      });
+      await recordFollowStatus({
+        instagramAccountId: automation.instagramAccountId,
+        igsid: senderId,
+        followsYou: follows,
       });
       sendFollowPrompt =
         accessToken.provider === "ZERNIO"

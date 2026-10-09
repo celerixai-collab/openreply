@@ -107,6 +107,14 @@ describe("contactsToCsv", () => {
       instagramAccount: "leo_creates",
       emailSource: "typed",
       consentText: consent,
+      name: "Leo 李",
+      followsYou: true,
+      followerCount: 1234,
+      sourceType: "comment",
+      sourceText: "想要 LINK，謝謝",
+      sourceMediaId: "17890000000000001",
+      sourceKeyword: "link",
+      optedOutAt: new Date("2026-10-10T09:00:00Z"),
     },
     {
       username: null,
@@ -116,6 +124,14 @@ describe("contactsToCsv", () => {
       instagramAccount: "leo_creates",
       emailSource: "quick_reply",
       consentText: null,
+      name: "@evil",
+      followsYou: false,
+      followerCount: null,
+      sourceType: "dm",
+      sourceText: "=HYPERLINK(\"http://x\")",
+      sourceMediaId: null,
+      sourceKeyword: "+1",
+      optedOutAt: null,
     },
   ]);
 
@@ -137,6 +153,14 @@ describe("contactsToCsv", () => {
       "instagram_account",
       "email_source",
       "consent_text",
+      "name",
+      "follows_you",
+      "follower_count",
+      "source_type",
+      "source_text",
+      "source_media_id",
+      "source_keyword",
+      "opted_out_at",
     ]);
     expect(csv).not.toMatch(/igsid/i);
   });
@@ -151,6 +175,14 @@ describe("contactsToCsv", () => {
       "leo_creates",
       "typed",
       consent,
+      "Leo 李",
+      "true",
+      "1234",
+      "comment",
+      "想要 LINK，謝謝",
+      "17890000000000001",
+      "link",
+      "2026-10-10T09:00:00.000Z",
     ]);
     expect(second).toEqual([
       "",
@@ -159,6 +191,15 @@ describe("contactsToCsv", () => {
       "'=cmd()",
       "leo_creates",
       "quick_reply",
+      "",
+      // Free text from the person is guarded like every other cell.
+      "'@evil",
+      "false",
+      "",
+      "dm",
+      '\'=HYPERLINK("http://x")',
+      "",
+      "'+1",
       "",
     ]);
   });

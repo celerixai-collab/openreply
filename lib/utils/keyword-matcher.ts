@@ -80,6 +80,21 @@ export function normalizeArabicScript(text: string): string {
  * A trigger keyword that is purely digits (optionally mixed with the letter
  * "o"/"O", the character it gets confused with) — e.g. "08", "17".
  */
+// A letter or number from a script that puts spaces between words. Script
+// extensions (scx) so marks shared by kana, like the long-vowel ー, count as
+// Japanese. Needs the `v` flag for the set difference.
+const SPACED_WORD_CHAR =
+  "[[\\p{L}\\p{N}]--[\\p{scx=Han}\\p{scx=Hiragana}\\p{scx=Katakana}\\p{scx=Thai}\\p{scx=Lao}\\p{scx=Khmer}\\p{scx=Myanmar}]]";
+
+/**
+ * Fold compatibility forms before matching: full-width Latin and digits
+ * typed with a Chinese or Japanese IME ("ｌｉｎｋ", "０８") become ASCII, and
+ * half-width katakana becomes full-width.
+ */
+function foldCompatibilityForms(text: string): string {
+  return text.normalize("NFKC");
+}
+
 function isNumericLikeKeyword(cleanedKeyword: string): boolean {
   return /^[0-9oO]+$/.test(cleanedKeyword);
 }
@@ -178,7 +193,7 @@ export function matchKeywords(
   }
 
   const cleanedText = foldDiacritics(
-    stripSpecialCharacters(normalizeArabicScript(commentText))
+    stripSpecialCharacters(normalizeArabicScript(foldCompatibilityForms(commentText)))
   ).toLowerCase();
 
   if (!cleanedText) {
@@ -187,7 +202,7 @@ export function matchKeywords(
 
   for (const keyword of keywords) {
     const cleanedKeyword = foldDiacritics(
-      stripSpecialCharacters(normalizeArabicScript(keyword))
+      stripSpecialCharacters(normalizeArabicScript(foldCompatibilityForms(keyword)))
     ).toLowerCase();
 
     if (!cleanedKeyword) continue;
@@ -208,11 +223,15 @@ export function matchKeywords(
         "\\$&"
       );
       // Unicode-aware "whole word": the keyword must not be flanked by another
-      // letter or number. Lookarounds replace ASCII `\b`, which never fires
-      // between two non-Latin characters.
+      // letter or number of a script that separates words with spaces.
+      // Lookarounds replace ASCII `\b`, which never fires between two
+      // non-Latin characters. Chinese, Japanese and Thai write words without
+      // spaces, so a neighbour from those scripts is never "the same word":
+      // "我要連結" matches 連結 and "我要link" matches link, while "linking"
+      // still does not match link.
       const regex = new RegExp(
-        `(?<![\\p{L}\\p{N}])${escapedKeyword}(?![\\p{L}\\p{N}])`,
-        "iu"
+        `(?<!${SPACED_WORD_CHAR})${escapedKeyword}(?!${SPACED_WORD_CHAR})`,
+        "iv"
       );
       if (regex.test(compareText)) {
         return { matched: true, matchedKeyword: keyword };

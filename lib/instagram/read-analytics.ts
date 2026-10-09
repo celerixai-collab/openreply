@@ -22,6 +22,22 @@ export async function getUserFollowStatus({
   }
 }
 
+/**
+ * A person's display name, username, follower count and follow status.
+ * Meta only: Zernio exposes no profile lookup, so it answers null, as any
+ * failure does.
+ */
+export async function getUserProfile({
+  context,
+  igsid,
+}: {
+  context: InstagramContext;
+  igsid: string;
+}): Promise<meta.InstagramUserProfile | null> {
+  if (context.provider !== "META") return null;
+  return meta.getUserProfile(context.accessToken, igsid);
+}
+
 export async function getMediaInsights({
   context,
   mediaId,

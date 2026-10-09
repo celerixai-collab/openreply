@@ -283,6 +283,54 @@ export async function getUserFollowStatus(
   }
 }
 
+/** A person's public profile, as the Instagram Messaging API sees it. */
+export interface InstagramUserProfile {
+  name: string | null;
+  username: string | null;
+  followerCount: number | null;
+  followsYou: boolean | null;
+}
+
+/**
+ * Read a person's profile (by their IGSID) via the Instagram Messaging User
+ * Profile API. Like getUserFollowStatus, only available for someone in an
+ * active conversation. Fields Meta leaves out come back null; any failure
+ * returns null, so callers can treat it as purely best-effort.
+ */
+export async function getUserProfile(
+  accessToken: string,
+  igsid: string
+): Promise<InstagramUserProfile | null> {
+  const url = new URL(`${instagramGraphBase()}/${igsid}`);
+  url.searchParams.set(
+    "fields",
+    "name,username,follower_count,is_user_follow_business"
+  );
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return {
+      name: typeof data?.name === "string" && data.name ? data.name : null,
+      username:
+        typeof data?.username === "string" && data.username ? data.username : null,
+      followerCount: Number.isSafeInteger(data?.follower_count)
+        ? data.follower_count
+        : null,
+      followsYou:
+        typeof data?.is_user_follow_business === "boolean"
+          ? data.is_user_follow_business
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A tappable web_url button in a DM button template. Instagram's button
  * template supports up to 3 buttons; titles are capped at 20 chars by Meta.

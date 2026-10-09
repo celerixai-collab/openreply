@@ -23,18 +23,44 @@ function contactWhere(instagramAccountId: string, igsid: string) {
   return { instagramAccountId_igsid: { instagramAccountId, igsid } };
 }
 
+export type ContactTrigger = {
+  type: "comment" | "dm";
+  // The comment or DM text; the caller masks a DM that holds an email.
+  text: string | null;
+  mediaId: string | null;
+  keyword: string | null;
+};
+
+function logContactWriteError(what: string, error: unknown) {
+  console.error(
+    `[Contacts] Failed to record ${what}:`,
+    error instanceof Error ? error.message : error
+  );
+}
+
 /**
- * Bookkeeping: note that a campaign matched this person. Never throws — a
- * contacts write must not block or fail the DM it accompanies.
+ * Bookkeeping: note that a campaign matched this person, and what they sent
+ * (`trigger`). Never throws — a contacts write must not block or fail the DM
+ * it accompanies.
  */
 export async function recordContactInteraction({
   workspaceId,
   instagramAccountId,
   igsid,
   username,
-}: ContactKey): Promise<void> {
+  trigger,
+}: ContactKey & { trigger?: ContactTrigger }): Promise<void> {
   try {
     const now = new Date();
+    const lastTrigger = trigger
+      ? {
+          lastTriggerType: trigger.type,
+          lastTriggerText: trigger.text,
+          lastTriggerMediaId: trigger.mediaId,
+          lastTriggerKeyword: trigger.keyword,
+          lastTriggerAt: now,
+        }
+      : {};
     await prisma.contact.upsert({
       where: contactWhere(instagramAccountId, igsid),
       create: {
@@ -44,16 +70,89 @@ export async function recordContactInteraction({
         username: username || null,
         firstSeenAt: now,
         lastInteractionAt: now,
+        ...lastTrigger,
       },
       // A DM job has no username; never blank out one a comment supplied.
-      update: { lastInteractionAt: now, ...(username ? { username } : {}) },
+      update: {
+        lastInteractionAt: now,
+        ...(username ? { username } : {}),
+        ...lastTrigger,
+      },
     });
   } catch (error) {
-    console.error(
-      "[Contacts] Failed to record a contact interaction:",
-      error instanceof Error ? error.message : error
-    );
+    logContactWriteError("a contact interaction", error);
   }
+}
+
+/**
+ * Note a follow check the worker made anyway (the follow gate). Only a
+ * definite answer is kept: null means Instagram could not tell. Never
+ * throws; a person without a contact row is left alone.
+ */
+export async function recordFollowStatus({
+  instagramAccountId,
+  igsid,
+  followsYou,
+}: {
+  instagramAccountId: string;
+  igsid: string;
+  followsYou: boolean | null;
+}): Promise<void> {
+  if (typeof followsYou !== "boolean") return;
+  try {
+    await prisma.contact.updateMany({
+      where: { instagramAccountId, igsid },
+      data: { followsYou, profileCheckedAt: new Date() },
+    });
+  } catch (error) {
+    logContactWriteError("a follow status", error);
+  }
+}
+
+/**
+ * Store a profile lookup. A field the lookup could not read keeps its old
+ * value, and a username is only filled in, never replaced (the comment
+ * webhook's is authoritative). Never throws.
+ */
+export async function storeContactProfile(
+  contact: Pick<Contact, "id" | "username">,
+  profile: {
+    name: string | null;
+    username: string | null;
+    followerCount: number | null;
+    followsYou: boolean | null;
+  }
+): Promise<void> {
+  try {
+    await prisma.contact.updateMany({
+      where: { id: contact.id },
+      data: {
+        profileCheckedAt: new Date(),
+        ...(profile.name ? { name: profile.name } : {}),
+        ...(profile.followerCount !== null
+          ? { followerCount: profile.followerCount }
+          : {}),
+        ...(profile.followsYou !== null ? { followsYou: profile.followsYou } : {}),
+        ...(!contact.username && profile.username
+          ? { username: profile.username }
+          : {}),
+      },
+    });
+  } catch (error) {
+    logContactWriteError("a contact profile", error);
+  }
+}
+
+/**
+ * Mark the person as opted out of email. A compare-and-set: returns true
+ * only for the call that opted them out, so a racing duplicate cannot.
+ */
+export async function optOutOfEmail(contact: Pick<Contact, "id">): Promise<boolean> {
+  const result = await prisma.contact.updateMany({
+    where: { id: contact.id, emailOptedOutAt: null },
+    data: { emailOptedOutAt: new Date() },
+  });
+  return result.count === 1;
 }
 
 /** The email already stored for this person on this account, if any. */
@@ -165,6 +264,12 @@ export async function storeCapturedEmail(
       emailCapturedAt: now,
       emailAutomationId: contact.pendingEmailAutomationId,
       emailConsentText: contact.pendingEmailPrompt,
+      // The comment or DM that opened this gate: the email reply itself is
+      // never recorded as a trigger, so it is still the last one.
+      emailSourceType: contact.lastTriggerType,
+      emailSourceText: contact.lastTriggerText,
+      emailSourceMediaId: contact.lastTriggerMediaId,
+      emailSourceKeyword: contact.lastTriggerKeyword,
       lastInteractionAt: now,
     },
   });

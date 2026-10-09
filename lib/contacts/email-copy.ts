@@ -13,6 +13,10 @@ export const DEFAULT_EMAIL_PROMPT_MESSAGE = `想拿到連結前，先留下你�
 export const DEFAULT_EMAIL_INVALID_MESSAGE =
   "這個 Email 好像怪怪的 🤔 再輸入一次看看？（例如 name@gmail.com）";
 export const DEFAULT_EMAIL_THANKS_MESSAGE = "收到 {email} ✅ 連結馬上傳給你！";
+// The answer to a "退訂" / "unsubscribe" DM: what makes the ask's "隨時可以
+// 退訂" true.
+export const DEFAULT_EMAIL_OPT_OUT_MESSAGE =
+  "已幫你取消訂閱 ✅ 之後不會再寄 Email 給你。";
 
 /**
  * The default ask. Without the quick-reply button (a comment's private reply,

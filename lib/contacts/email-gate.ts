@@ -4,6 +4,7 @@ import type { Contact } from "@/app/generated/prisma/client";
 import { isConfirmedSendRejection } from "@/lib/instagram/delivery-errors";
 import {
   createInstagramContext,
+  getUserProfile,
   hasInstagramCredentials,
   sendDirectMessage,
   sendDirectMessageWithEmailQuickReply,
@@ -23,12 +24,15 @@ import {
   findMessageContact,
   isClaimed,
   openEmailGate,
+  optOutOfEmail,
   recordFailedEmailAttempt,
   reloadContact,
   storeCapturedEmail,
+  storeContactProfile,
 } from "./contacts";
 import {
   DEFAULT_EMAIL_INVALID_MESSAGE,
+  DEFAULT_EMAIL_OPT_OUT_MESSAGE,
   DEFAULT_EMAIL_THANKS_MESSAGE,
   defaultEmailPrompt,
   truncateToUtf8Bytes,
@@ -44,8 +48,9 @@ import {
  * - a button tap (reveal / follow check): the ask goes out as a DM;
  * - a DM keyword trigger: the ask replaces the link.
  *
- * Every inbound DM first passes `handleEmailGateReply`, which answers the
- * open gate (if any) before the keyword campaigns see the message.
+ * Every inbound DM first passes `handleEmailGateReply`, which answers an
+ * unsubscribe request and the open gate (if any) before the keyword
+ * campaigns see the message.
  */
 
 type GateCopy = {
@@ -317,9 +322,84 @@ export async function emailGateSilencedFor(
   );
 }
 
+// The whole message must be one of these (see isEmailOptOutMessage), so a
+// sentence that merely mentions "stop" is not an unsubscribe.
+const OPT_OUT_WORDS = new Set([
+  "退訂",
+  "取消訂閱",
+  "取消订阅",
+  "退订",
+  "unsubscribe",
+  "stop",
+  "cancelar",
+]);
+
+// Trailing punctuation, symbols, emoji (with their joiners, variation
+// selectors and keycaps) and spaces: "退訂！", "STOP 🙏", "unsubscribe." all
+// count.
+const TRAILING_NOISE =
+  /[\s\p{P}\p{S}\p{Extended_Pictographic}\u200d\ufe0f\u20e3]+$/u;
+
+/** Whether a DM, as a whole, asks to stop receiving email. */
+export function isEmailOptOutMessage(text: string | null | undefined): boolean {
+  const normalized = String(text ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(TRAILING_NOISE, "");
+  return OPT_OUT_WORDS.has(normalized);
+}
+
+/**
+ * Opt the sender out of email and confirm it once. Only the call that opts
+ * them out confirms (a compare-and-set), and that confirmation also holds a
+ * durable claim on the message id, so a redelivery or a racing duplicate
+ * never sends a second one. Best-effort: a confirmation that cannot be sent
+ * leaves the opt-out in place.
+ */
+async function optOutByMessage(
+  contact: Contact,
+  message: InboundMessage,
+  operationId: string
+): Promise<void> {
+  if (contact.emailOptedOutAt || !(await optOutOfEmail(contact))) return;
+  if (
+    !(await claimOnce(
+      claimId("email-opt-out", contact.instagramAccountId, message.messageId)
+    ))
+  ) {
+    return;
+  }
+  try {
+    const account = await prisma.instagramAccount.findUnique({
+      where: { id: contact.instagramAccountId },
+    });
+    if (
+      !account ||
+      account.instagramId !== message.instagramAccountId ||
+      !hasInstagramCredentials(account)
+    ) {
+      return;
+    }
+    await sendDirectMessage({
+      context: await createInstagramContext(account, operationId),
+      instagramAccountId: account.instagramId,
+      userId: message.senderId,
+      message: truncateToUtf8Bytes(DEFAULT_EMAIL_OPT_OUT_MESSAGE),
+    });
+  } catch (error) {
+    console.log("[Email gate] Opt-out confirmation not sent:", describeError(error));
+  }
+}
+
 /**
  * The inbound-DM step that runs BEFORE the keyword campaigns. Returns true
  * when the message belonged to the email gate (stop), false to hand it on.
+ *
+ * First, an unsubscribe ("退訂", "stop", ...; see isEmailOptOutMessage) from
+ * someone whose email is stored opts them out and is answered here, so no
+ * keyword campaign also replies to it. Without a stored email there is
+ * nothing to opt out of, and the message goes on unchanged.
  *
  * With an open gate for an active campaign that still collects email:
  * 1. an email in the text is stored, thanked once and answered with that
@@ -352,6 +432,11 @@ export async function handleEmailGateReply({
     igsid: message.senderId,
   });
   if (!contact) return false;
+
+  if (contact.email && isEmailOptOutMessage(message.messageText)) {
+    await optOutByMessage(contact, message, operationId);
+    return true;
+  }
 
   const messageClaim = claimId(
     "email-gate-message",
@@ -465,12 +550,15 @@ async function completeEmailCapture({
   await claimOnce(messageClaim);
 
   let storedEmail = email;
+  // Whether this call stored the email: only then is the profile looked up,
+  // so a retry or a racing message does not look it up again.
+  let freshCapture = false;
   if (!contact.email) {
-    const stored = await storeCapturedEmail(contact, {
+    freshCapture = await storeCapturedEmail(contact, {
       email,
       source: message.fromQuickReply ? "quick_reply" : "typed",
     });
-    if (!stored) {
+    if (!freshCapture) {
       // Another message stored an email first. Finish its capture if this
       // gate is still the open one; if it closed, that message delivered.
       const fresh = await reloadContact(contact.id);
@@ -514,16 +602,38 @@ async function completeEmailCapture({
   // held elsewhere belongs to an attempt that closes it itself once its send
   // succeeds (and may yet fail and retry), and a monthly limit leaves it open
   // so the person's next message, once the limit resets, gets the link.
-  const delivery = await deps.deliverLink({
-    automation,
-    accessToken,
-    userId: message.senderId,
-    commenterName: contact.username,
-    operationId: claimId("email-reveal", contact.id, gate),
-    commentText: "(email reply)",
-    beforeLink: sendThanks,
-  });
-  if (delivery === "sent") await clearEmailGate(contact);
+  try {
+    const delivery = await deps.deliverLink({
+      automation,
+      accessToken,
+      userId: message.senderId,
+      commenterName: contact.username,
+      operationId: claimId("email-reveal", contact.id, gate),
+      commentText: "(email reply)",
+      beforeLink: sendThanks,
+    });
+    if (delivery === "sent") await clearEmailGate(contact);
+  } finally {
+    // After the link, whatever became of it: the lookup never holds it up.
+    if (freshCapture) await enrichContactProfile(contact, accessToken, message.senderId);
+  }
+}
+
+/**
+ * Best-effort: the person's display name, follower count and follow status,
+ * read once their email is captured. Never throws.
+ */
+async function enrichContactProfile(
+  contact: Contact,
+  context: InstagramContext,
+  igsid: string
+): Promise<void> {
+  try {
+    const profile = await getUserProfile({ context, igsid });
+    if (profile) await storeContactProfile(contact, profile);
+  } catch (error) {
+    console.log("[Email gate] Profile lookup failed:", describeError(error));
+  }
 }
 
 async function answerWithoutEmail({

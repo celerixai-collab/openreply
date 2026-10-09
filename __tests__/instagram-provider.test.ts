@@ -14,6 +14,7 @@ import {
   getRecentMediaComments,
   getUserFollowStatus,
   getUserMedia,
+  getUserProfile,
 } from "@/lib/instagram/provider";
 import { zernioRequest } from "@/lib/zernio/client";
 import { RateLimitError, TokenExpiredError } from "@/lib/meta/client";
@@ -158,6 +159,35 @@ describe("Instagram provider boundary", () => {
     expect(
       await getUserFollowStatus({ context, recipientId: "person" })
     ).toBeNull();
+  });
+  it("reads a person's profile from Meta, nulling what it leaves out", async () => {
+    respond({ name: "Leo 李", follower_count: 1234, is_user_follow_business: false });
+    expect(
+      await getUserProfile({
+        context: { provider: "META", accessToken: "meta" },
+        igsid: "person",
+      })
+    ).toEqual({ name: "Leo 李", username: null, followerCount: 1234, followsYou: false });
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.pathname).toMatch(/\/person$/);
+    expect(url.searchParams.get("fields")).toBe(
+      "name,username,follower_count,is_user_follow_business"
+    );
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer meta");
+  });
+  it("answers a failed profile lookup with null", async () => {
+    respond({ error: { message: "consent required" } }, 400);
+    expect(
+      await getUserProfile({ context: { provider: "META", accessToken: "meta" }, igsid: "p" })
+    ).toBeNull();
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    expect(
+      await getUserProfile({ context: { provider: "META", accessToken: "meta" }, igsid: "p" })
+    ).toBeNull();
+  });
+  it("has no profile lookup on Zernio", async () => {
+    expect(await getUserProfile({ context, igsid: "person" })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("preserves direct Meta requests", async () => {
     respond({ data: [{ id: "media" }] });

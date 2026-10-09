@@ -36,6 +36,18 @@ const storedContact = {
   emailCapturedAt: new Date("2026-10-08T12:34:56.000Z"),
   emailSource: "quick_reply",
   emailConsentText: "想拿到連結前，先留下你的 Email 📩",
+  emailSourceType: "comment",
+  emailSourceText: "LINK",
+  emailSourceMediaId: "media_1",
+  emailSourceKeyword: "link",
+  emailOptedOutAt: null,
+  lastTriggerType: "dm",
+  lastTriggerText: "hello",
+  lastTriggerMediaId: null,
+  lastTriggerKeyword: null,
+  name: "Leo",
+  followsYou: true,
+  followerCount: 42,
   firstSeenAt: new Date("2026-10-08T12:00:00.000Z"),
   lastInteractionAt: new Date("2026-10-08T12:34:56.000Z"),
   emailAutomation: { id: "automation_1", name: "Free guide" },
@@ -101,6 +113,23 @@ describe("GET /api/contacts", () => {
     expect(select).not.toHaveProperty("igsid");
     expect(select).not.toHaveProperty("pendingEmailPrompt");
     expect(select).not.toHaveProperty("pendingEmailAutomationId");
+  });
+
+  it("exposes the profile, the email's source and the opt-out", async () => {
+    await GET(request("/api/contacts"));
+    const { select } = mockPrisma.contact.findMany.mock.calls[0][0];
+    for (const field of [
+      "name",
+      "followsYou",
+      "followerCount",
+      "emailSourceType",
+      "emailSourceText",
+      "emailSourceMediaId",
+      "emailSourceKeyword",
+      "emailOptedOutAt",
+    ]) {
+      expect(select, field).toHaveProperty(field, true);
+    }
   });
 
   it("searches username and email inside the workspace, and can include people without an email", async () => {
@@ -209,8 +238,8 @@ describe("GET /api/contacts/export", () => {
     );
     expect(text.startsWith(BOM)).toBe(true);
     expect(text.slice(1).split("\r\n")).toEqual([
-      '"username","email","captured_at","campaign","instagram_account","email_source","consent_text"',
-      '"leo","leo@example.com","2026-10-08T12:34:56.000Z","Free guide","creator","quick_reply","想拿到連結前，先留下你的 Email 📩"',
+      '"username","email","captured_at","campaign","instagram_account","email_source","consent_text","name","follows_you","follower_count","source_type","source_text","source_media_id","source_keyword","opted_out_at"',
+      '"leo","leo@example.com","2026-10-08T12:34:56.000Z","Free guide","creator","quick_reply","想拿到連結前，先留下你的 Email 📩","Leo","true","42","comment","LINK","media_1","link",""',
       "",
     ]);
     expect(text).not.toContain("igsid");
@@ -251,7 +280,26 @@ describe("GET /api/contacts/export", () => {
       await (await EXPORT(request("/api/contacts/export"))).arrayBuffer()
     );
     expect(text.split("\r\n")[1]).toBe(
-      '"leo","leo@example.com","2026-10-08T12:34:56.000Z","","creator","","想拿到連結前，先留下你的 Email 📩"'
+      '"leo","leo@example.com","2026-10-08T12:34:56.000Z","","creator","","想拿到連結前，先留下你的 Email 📩","Leo","true","42","comment","LINK","media_1","link",""'
+    );
+  });
+
+  it("shows what someone without an email last sent, and an opt-out date", async () => {
+    mockPrisma.contact.findMany.mockResolvedValue([
+      {
+        ...storedContact,
+        email: null,
+        emailCapturedAt: null,
+        emailOptedOutAt: new Date("2026-10-09T01:02:03.000Z"),
+        followsYou: null,
+        followerCount: null,
+      },
+    ]);
+    const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+      await (await EXPORT(request("/api/contacts/export?hasEmail=false"))).arrayBuffer()
+    );
+    expect(text.split("\r\n")[1]).toMatch(
+      /,"Leo","","","dm","hello","","","2026-10-09T01:02:03\.000Z"$/
     );
   });
 });

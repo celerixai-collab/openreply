@@ -23,6 +23,14 @@ export const CONTACT_CSV_COLUMNS = [
   "instagram_account",
   "email_source",
   "consent_text",
+  "name",
+  "follows_you",
+  "follower_count",
+  "source_type",
+  "source_text",
+  "source_media_id",
+  "source_keyword",
+  "opted_out_at",
 ] as const;
 
 export type ContactCsvRow = {
@@ -33,9 +41,17 @@ export type ContactCsvRow = {
   instagramAccount: string | null;
   emailSource: string | null;
   consentText: string | null;
+  name: string | null;
+  followsYou: boolean | null;
+  followerCount: number | null;
+  sourceType: string | null;
+  sourceText: string | null;
+  sourceMediaId: string | null;
+  sourceKeyword: string | null;
+  optedOutAt: Date | null;
 };
 
-type CsvValue = string | Date | null | undefined;
+type CsvValue = string | number | boolean | Date | null | undefined;
 
 // Checked on the NFKC form, so full-width and small-form variants fold to
 // the ASCII characters first; leading whitespace does not hide a formula.
@@ -75,6 +91,14 @@ export function contactsToCsv(rows: readonly ContactCsvRow[]): string {
       row.instagramAccount,
       row.emailSource,
       row.consentText,
+      row.name,
+      row.followsYou,
+      row.followerCount,
+      row.sourceType,
+      row.sourceText,
+      row.sourceMediaId,
+      row.sourceKeyword,
+      row.optedOutAt,
     ])
   );
 }

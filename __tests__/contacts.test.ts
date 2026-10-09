@@ -19,9 +19,12 @@ import {
   clearEmailGate,
   findKnownEmail,
   openEmailGate,
+  optOutOfEmail,
   recordContactInteraction,
   recordFailedEmailAttempt,
+  recordFollowStatus,
   storeCapturedEmail,
+  storeContactProfile,
 } from "../lib/contacts/contacts";
 import type { Contact } from "@/app/generated/prisma/client";
 
@@ -32,11 +35,25 @@ const openContact = {
   instagramAccountId: "account_1",
   igsid: "person_1",
   username: "leo.tw",
+  name: null,
+  followerCount: null,
+  followsYou: null,
+  profileCheckedAt: null,
+  lastTriggerType: "comment",
+  lastTriggerText: "想要 LINK",
+  lastTriggerMediaId: "media_1",
+  lastTriggerKeyword: "link",
+  lastTriggerAt: new Date(),
   email: null,
   emailCapturedAt: null,
   emailAutomationId: null,
   emailSource: null,
   emailConsentText: null,
+  emailSourceType: null,
+  emailSourceText: null,
+  emailSourceMediaId: null,
+  emailSourceKeyword: null,
+  emailOptedOutAt: null,
   pendingEmailAutomationId: "campaign_1",
   pendingEmailPrompt: "the ask",
   pendingEmailAttempts: 3,
@@ -68,6 +85,38 @@ describe("recordContactInteraction", () => {
     expect(args.update).not.toHaveProperty("username");
     expect(args.update.lastInteractionAt).toBeInstanceOf(Date);
     expect(args.create).toMatchObject({ workspaceId: "workspace_1", username: null });
+  });
+
+  it("records the trigger on both a new and a known contact", async () => {
+    await recordContactInteraction({
+      workspaceId: "workspace_1",
+      instagramAccountId: "account_1",
+      igsid: "person_1",
+      username: "leo.tw",
+      trigger: { type: "comment", text: "LINK please", mediaId: "media_1", keyword: "link" },
+    });
+
+    const { create, update } = mockPrisma.contact.upsert.mock.calls[0][0];
+    for (const data of [create, update]) {
+      expect(data).toMatchObject({
+        lastTriggerType: "comment",
+        lastTriggerText: "LINK please",
+        lastTriggerMediaId: "media_1",
+        lastTriggerKeyword: "link",
+      });
+      expect(data.lastTriggerAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it("leaves the last trigger alone when none is given", async () => {
+    await recordContactInteraction({
+      workspaceId: "workspace_1",
+      instagramAccountId: "account_1",
+      igsid: "person_1",
+    });
+    const { update } = mockPrisma.contact.upsert.mock.calls[0][0];
+    expect(update).not.toHaveProperty("lastTriggerText");
+    expect(update).not.toHaveProperty("lastTriggerAt");
   });
 
   it("never throws, so it cannot block the DM it accompanies", async () => {
@@ -140,6 +189,11 @@ describe("email gate state", () => {
         emailAutomationId: "campaign_1",
         emailConsentText: "the ask",
         emailCapturedAt: expect.any(Date),
+        // The comment that opened the gate, snapshotted with the email.
+        emailSourceType: "comment",
+        emailSourceText: "想要 LINK",
+        emailSourceMediaId: "media_1",
+        emailSourceKeyword: "link",
       }),
     });
 
@@ -206,5 +260,81 @@ describe("claimOnce", () => {
     expect(await claimOnce("x")).toBe(true);
     expect(await claimOnce("x")).toBe(false);
     await expect(claimOnce("x")).rejects.toThrow("db down");
+  });
+});
+
+describe("contact enrichment", () => {
+  it("records a definite follow status, and ignores an unknown one", async () => {
+    await recordFollowStatus({
+      instagramAccountId: "account_1",
+      igsid: "person_1",
+      followsYou: false,
+    });
+    expect(mockPrisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { instagramAccountId: "account_1", igsid: "person_1" },
+      data: { followsYou: false, profileCheckedAt: expect.any(Date) },
+    });
+
+    mockPrisma.contact.updateMany.mockClear();
+    await recordFollowStatus({
+      instagramAccountId: "account_1",
+      igsid: "person_1",
+      followsYou: null,
+    });
+    expect(mockPrisma.contact.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("never throws on a failed follow status or profile write", async () => {
+    mockPrisma.contact.updateMany.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      recordFollowStatus({ instagramAccountId: "a", igsid: "p", followsYou: true })
+    ).resolves.toBeUndefined();
+    await expect(
+      storeContactProfile(openContact, {
+        name: "Leo",
+        username: null,
+        followerCount: 1,
+        followsYou: true,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("stores what the profile lookup read, keeping fields it could not read", async () => {
+    await storeContactProfile(openContact, {
+      name: "Leo 李",
+      username: "someone_else",
+      followerCount: 1234,
+      followsYou: null,
+    });
+    const { where, data } = mockPrisma.contact.updateMany.mock.calls[0][0];
+    expect(where).toEqual({ id: "contact_1" });
+    expect(data).toEqual({
+      name: "Leo 李",
+      followerCount: 1234,
+      profileCheckedAt: expect.any(Date),
+    });
+
+    // A username is filled in only when none is known.
+    await storeContactProfile(
+      { id: "contact_2", username: null },
+      { name: null, username: "leo.tw", followerCount: 0, followsYou: true }
+    );
+    expect(mockPrisma.contact.updateMany.mock.calls[1][0].data).toEqual({
+      username: "leo.tw",
+      followerCount: 0,
+      followsYou: true,
+      profileCheckedAt: expect.any(Date),
+    });
+  });
+
+  it("opts out with a compare-and-set, so only one call wins", async () => {
+    expect(await optOutOfEmail(openContact)).toBe(true);
+    expect(mockPrisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: "contact_1", emailOptedOutAt: null },
+      data: { emailOptedOutAt: expect.any(Date) },
+    });
+    mockPrisma.contact.updateMany.mockResolvedValue({ count: 0 });
+    expect(await optOutOfEmail(openContact)).toBe(false);
   });
 });

@@ -301,3 +301,47 @@ describe("matchKeywords — diacritics", () => {
     expect(matchKeywords("иод", ["йод"], true).matched).toBe(false);
   });
 });
+
+describe("matchKeywords — scripts without spaces (whole-word mode)", () => {
+  it("matches a Chinese keyword inside a sentence", () => {
+    expect(matchKeywords("我要連結", ["連結"], true).matched).toBe(true);
+    expect(matchKeywords("求連結🙏", ["連結"], true).matched).toBe(true);
+    expect(matchKeywords("連結連結", ["連結"], true).matched).toBe(true);
+  });
+
+  it("matches a Latin keyword right next to Chinese text", () => {
+    expect(matchKeywords("我要link", ["link"], true).matched).toBe(true);
+    expect(matchKeywords("link給我", ["link"], true).matched).toBe(true);
+  });
+
+  it("still requires whole words inside Latin text", () => {
+    expect(matchKeywords("我要linking", ["link"], true).matched).toBe(false);
+    expect(matchKeywords("I am linking", ["link"], true).matched).toBe(false);
+  });
+
+  it("matches Japanese with the long-vowel mark", () => {
+    expect(matchKeywords("リンクください", ["リンク"], true).matched).toBe(true);
+    expect(matchKeywords("コーヒー", ["ヒー"], true).matched).toBe(true);
+  });
+
+  it("keeps Korean word boundaries (Korean uses spaces)", () => {
+    expect(matchKeywords("링크주세요", ["링크"], true).matched).toBe(false);
+    expect(matchKeywords("링크 주세요", ["링크"], true).matched).toBe(true);
+  });
+
+  it("does not mix Traditional and Simplified Chinese", () => {
+    expect(matchKeywords("链接", ["連結"], true).matched).toBe(false);
+  });
+});
+
+describe("matchKeywords — full-width forms", () => {
+  it("matches full-width Latin and digits typed with an IME", () => {
+    expect(matchKeywords("ｌｉｎｋ", ["link"], true).matched).toBe(true);
+    expect(matchKeywords("ＬＩＮＫ", ["link"], false).matched).toBe(true);
+    expect(matchKeywords("０８", ["08"], true).matched).toBe(true);
+  });
+
+  it("matches a full-width keyword against ASCII text", () => {
+    expect(matchKeywords("send link", ["ｌｉｎｋ"], true).matched).toBe(true);
+  });
+});

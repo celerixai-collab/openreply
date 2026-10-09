@@ -243,6 +243,21 @@ model Contact {
   /// Instagram-scoped id of the person (the commenter / DM sender id).
   igsid              String
   username           String?
+  /// Instagram display name, from the Messaging User Profile API.
+  name               String?
+  followerCount      Int?
+  /// Whether the person follows the account, as last checked (null: never
+  /// checked, or the check could not tell).
+  followsYou         Boolean?
+  profileCheckedAt   DateTime?
+
+  /// What last brought this person in: "comment" or "dm", its text (a DM
+  /// with an email in it is stored as a placeholder), post and keyword.
+  lastTriggerType    String?
+  lastTriggerText    String?
+  lastTriggerMediaId String?
+  lastTriggerKeyword String?
+  lastTriggerAt      DateTime?
 
   email             String?
   emailCapturedAt   DateTime?
@@ -252,6 +267,14 @@ model Contact {
   emailSource       String?
   /// Snapshot of the exact ask message that was sent: the consent record.
   emailConsentText  String?
+  /// Snapshot of the trigger (comment or DM) that led to the email, copied
+  /// from lastTrigger* when the email is stored.
+  emailSourceType    String?
+  emailSourceText    String?
+  emailSourceMediaId String?
+  emailSourceKeyword String?
+  /// The person replied "退訂" / "unsubscribe" by DM: do not email them.
+  emailOptedOutAt    DateTime?
 
   /// An open email gate: set only after its ask was sent, cleared once the
   /// link has been delivered. One open gate per person at a time.
