@@ -1849,12 +1849,16 @@ describe("DM Worker — email gate", () => {
   let contacts: FakeContact[];
   let claims: Set<string>;
 
-  // A small in-memory stand-in for the Contact table: equality filters only,
-  // which is all the gate's compare-and-set writes use. Each call runs to
-  // completion before the next, like a single-row atomic update.
-  function matches(row: FakeContact, where: Record<string, unknown>) {
+  // A small in-memory stand-in for the Contact table: equality filters, OR
+  // and `{ not: null }`, which is all the gate's compare-and-set writes use.
+  // Each call runs to completion before the next, like a single-row atomic
+  // update.
+  function matches(row: FakeContact, where: Record<string, unknown>): boolean {
     return Object.entries(where).every(([key, value]) => {
       if (key === "instagramAccount") return true;
+      if (key === "OR") {
+        return (value as Record<string, unknown>[]).some((branch) => matches(row, branch));
+      }
       if (key === "instagramAccountId_igsid") {
         const compound = value as { instagramAccountId: string; igsid: string };
         return (
@@ -1863,6 +1867,14 @@ describe("DM Worker — email gate", () => {
         );
       }
       const actual = (row as Record<string, unknown>)[key];
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        !(value instanceof Date) &&
+        "not" in value
+      ) {
+        return actual !== (value as { not: unknown }).not;
+      }
       if (value instanceof Date) {
         return actual instanceof Date && actual.getTime() === value.getTime();
       }
@@ -2070,6 +2082,26 @@ describe("DM Worker — email gate", () => {
       expect(contacts[0].pendingEmailAutomationId).toBeNull();
     });
 
+    it("asks again someone who unsubscribed, instead of reusing their old email", async () => {
+      seedContact({
+        email: "old@example.com",
+        emailCapturedAt: new Date(),
+        emailOptedOutAt: new Date(),
+      });
+      mockPrisma.automation.findMany.mockResolvedValue([gated]);
+      mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
+
+      await getProcessor()(createMockJob());
+
+      expect(mockSendPrivateReply).toHaveBeenCalledWith(
+        "decrypted_token",
+        "ig_456",
+        "comment_555",
+        defaultEmailPrompt(false)
+      );
+      expect(contacts[0].pendingEmailAutomationId).toBe("auto_789");
+    });
+
     it("asks by DM, with the one-tap email button, after a button tap passes the follow gate", async () => {
       mockPrisma.automation.findFirst.mockResolvedValue({
         ...gated,
@@ -2253,6 +2285,37 @@ describe("DM Worker — email gate", () => {
           }),
         })
       );
+    });
+
+    it("does not complete an open gate with an unsubscribed person's old email", async () => {
+      openGate({ email: "old@example.com", emailOptedOutAt: new Date() });
+
+      await getProcessor()(messageJob("what is this?"));
+
+      expect(directTexts()).not.toContain(LINK_TEXT);
+      expect(contacts[0].pendingEmailAttempts).toBe(1);
+      expect(contacts[0].email).toBe("old@example.com");
+    });
+
+    it("stores an unsubscribed person's new email and subscribes them again", async () => {
+      openGate({
+        email: "old@example.com",
+        emailCapturedAt: new Date(0),
+        emailOptedOutAt: new Date(),
+      });
+
+      await getProcessor()(messageJob("new@example.com"));
+
+      expect(contacts[0]).toMatchObject({
+        email: "new@example.com",
+        emailOptedOutAt: null,
+        emailConsentText: "ASK SENT EARLIER",
+        pendingEmailAutomationId: null,
+      });
+      expect(directTexts()).toEqual([
+        "收到 new@example.com ✅ 連結馬上傳給你！",
+        LINK_TEXT,
+      ]);
     });
 
     it("schedules the follow-up after the link, as a button tap does", async () => {

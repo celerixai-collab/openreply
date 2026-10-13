@@ -155,16 +155,19 @@ export async function optOutOfEmail(contact: Pick<Contact, "id">): Promise<boole
   return result.count === 1;
 }
 
-/** The email already stored for this person on this account, if any. */
+/**
+ * The usable email stored for this person on this account, if any. Someone
+ * who unsubscribed has none: the gate asks them again.
+ */
 export async function findKnownEmail(
   instagramAccountId: string,
   igsid: string
 ): Promise<string | null> {
   const contact = await prisma.contact.findUnique({
     where: contactWhere(instagramAccountId, igsid),
-    select: { email: true },
+    select: { email: true, emailOptedOutAt: true },
   });
-  return contact?.email ?? null;
+  return contact ? usableEmail(contact) : null;
 }
 
 /** The open email gate (if any) for this person on this account. */
@@ -248,8 +251,20 @@ function sameGate(contact: Contact) {
 }
 
 /**
- * Store the captured email while the gate is still open and no email is
- * stored yet. Returns false when another message got there first.
+ * An email the gate can rely on: none once the person has unsubscribed, so
+ * they have to leave one again (and consent again) before the next link.
+ */
+export function usableEmail(
+  contact: Pick<Contact, "email" | "emailOptedOutAt">
+): string | null {
+  return contact.emailOptedOutAt ? null : contact.email;
+}
+
+/**
+ * Store the captured email while the gate is still open and no usable email
+ * is stored yet. Returns false when another message got there first. An
+ * unsubscribed person's new email replaces the old one and subscribes them
+ * again, with this ask as their new consent.
  */
 export async function storeCapturedEmail(
   contact: Contact,
@@ -257,9 +272,13 @@ export async function storeCapturedEmail(
 ): Promise<boolean> {
   const now = new Date();
   const result = await prisma.contact.updateMany({
-    where: { ...sameGate(contact), email: null },
+    where: {
+      ...sameGate(contact),
+      OR: [{ email: null }, { emailOptedOutAt: { not: null } }],
+    },
     data: {
       email,
+      emailOptedOutAt: null,
       emailSource: source,
       emailCapturedAt: now,
       emailAutomationId: contact.pendingEmailAutomationId,

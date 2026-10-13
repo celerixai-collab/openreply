@@ -21,6 +21,7 @@ import {
   clearEmailGate,
   findGateState,
   findKnownEmail,
+  usableEmail,
   findMessageContact,
   isClaimed,
   openEmailGate,
@@ -490,13 +491,14 @@ export async function handleEmailGateReply({
   // link's claim (it sent the link, is sending it, or ended unconfirmed),
   // there is nothing left to finish: a new message then goes on to the
   // keyword campaigns instead of being swallowed by the gate.
+  const knownEmail = usableEmail(contact);
   if (
-    contact.email &&
+    knownEmail &&
     (await isClaimed(claimId("email-reveal", contact.id, gateInstance(contact))))
   ) {
     return isClaimed(messageClaim);
   }
-  const email = contact.email ?? extractEmail(message.messageText);
+  const email = knownEmail ?? extractEmail(message.messageText);
   if (email) {
     await completeEmailCapture({
       contact,
@@ -553,7 +555,7 @@ async function completeEmailCapture({
   // Whether this call stored the email: only then is the profile looked up,
   // so a retry or a racing message does not look it up again.
   let freshCapture = false;
-  if (!contact.email) {
+  if (!usableEmail(contact)) {
     freshCapture = await storeCapturedEmail(contact, {
       email,
       source: message.fromQuickReply ? "quick_reply" : "typed",
@@ -562,10 +564,11 @@ async function completeEmailCapture({
       // Another message stored an email first. Finish its capture if this
       // gate is still the open one; if it closed, that message delivered.
       const fresh = await reloadContact(contact.id);
-      if (!fresh?.email || gateInstance(fresh) !== gateInstance(contact)) {
+      const freshEmail = fresh ? usableEmail(fresh) : null;
+      if (!freshEmail || gateInstance(fresh!) !== gateInstance(contact)) {
         return;
       }
-      storedEmail = fresh.email;
+      storedEmail = freshEmail;
     }
   }
 

@@ -181,10 +181,11 @@ describe("email gate state", () => {
         id: "contact_1",
         pendingEmailAutomationId: "campaign_1",
         pendingEmailExpiresAt: expiresAt,
-        email: null,
+        OR: [{ email: null }, { emailOptedOutAt: { not: null } }],
       },
       data: expect.objectContaining({
         email: "leo@gmail.com",
+        emailOptedOutAt: null,
         emailSource: "typed",
         emailAutomationId: "campaign_1",
         emailConsentText: "the ask",
@@ -247,6 +248,14 @@ describe("email gate state", () => {
     expect(await findKnownEmail("account_1", "person_1")).toBe("leo@gmail.com");
     mockPrisma.contact.findUnique.mockResolvedValue(null);
     expect(await findKnownEmail("account_1", "person_2")).toBeNull();
+  });
+
+  it("has no known email for someone who unsubscribed", async () => {
+    mockPrisma.contact.findUnique.mockResolvedValue({
+      email: "leo@gmail.com",
+      emailOptedOutAt: new Date(),
+    });
+    expect(await findKnownEmail("account_1", "person_1")).toBeNull();
   });
 });
 
