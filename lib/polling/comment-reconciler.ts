@@ -70,6 +70,8 @@ const LOOKBACK_HOURS = Math.min(
 // Hard cap on how many new comments a single campaign can enqueue per sweep, so
 // a viral post drains gradually instead of bursting into the comment API.
 const MAX_NEW_PER_SWEEP = Number(process.env.COMMENT_POLL_MAX_PER_SWEEP ?? 30);
+// Comments read per post per sweep (Meta pages them 50 at a time).
+const MAX_COMMENTS_PER_MEDIA = 5000;
 // For "any post" campaigns, how many recent posts to scan.
 const RECENT_MEDIA_LIMIT = 10;
 
@@ -221,14 +223,30 @@ async function sweepCampaign({
         context: accessToken,
         mediaId: mediaId,
         sinceMs: sinceMs,
+        // A busy post easily passes 800 comments in its 7 days; the oldest
+        // ones are the closest to the private-reply deadline, so read them all.
+        max: MAX_COMMENTS_PER_MEDIA,
       });
     } catch (error) {
       stat.errors.push(`Comments ${mediaId}: ${errMessage(error)}`);
       continue;
     }
 
+    // Comments this campaign has already worked on. For these, a reply from
+    // the account under the comment is usually the campaign's own public
+    // reply, which says nothing about whether the DM went out.
+    const known = new Set(
+      (
+        await prisma.dmLog.findMany({
+          where: { automationId: automation.id, commentId: { in: comments.map((c) => c.id) } },
+          select: { commentId: true },
+        })
+      ).map((log) => log.commentId)
+    );
+
     // Keep only comments that (a) aren't the account's own, (b) match the
-    // keyword, and (c) have no reply from the account owner yet.
+    // keyword, and (c) have no reply from the account owner yet, unless the
+    // campaign has already worked on them (then its DmLog decides below).
     const needsAction = comments.filter((c) => {
       const authorId = c.from?.id;
       if (!authorId || authorId === account.instagramId) return false;
@@ -246,7 +264,7 @@ async function sweepCampaign({
       const ownerReplied = (c.replies?.data ?? []).some(
         (r) => r.from?.id === account.instagramId
       );
-      if (ownerReplied) {
+      if (ownerReplied && !known.has(c.id)) {
         stat.alreadyReplied += 1;
         return false;
       }

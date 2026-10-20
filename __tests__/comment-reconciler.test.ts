@@ -135,4 +135,54 @@ describe("comment polling does not recreate unsafe sends", () => {
         expect(data.commentId).toBe("new");
     },
   );
+
+  it("retries a comment whose only owner reply is the campaign's own public reply", async () => {
+    readComments.mockResolvedValue([
+      {
+        id: "replied-by-campaign",
+        text: "AI",
+        from: { id: "reader" },
+        timestamp: new Date().toISOString(),
+        replies: { data: [{ from: { id: "owner" } }] },
+      },
+      {
+        id: "replied-by-hand",
+        text: "AI",
+        from: { id: "another-reader" },
+        timestamp: new Date().toISOString(),
+        replies: { data: [{ from: { id: "owner" } }] },
+      },
+    ]);
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      {
+        commentId: "replied-by-campaign",
+        status: "PENDING",
+        attempts: 0,
+        dmDeliveryUnconfirmed: false,
+        errorMessage: "Re-queued after Instagram throttling on 2026-10-20",
+        updatedAt: new Date(),
+        publicReplySentAt: new Date(),
+      },
+    ]);
+    await reconcileComments();
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    expect(queueAdd.mock.calls[0][1].commentId).toBe("replied-by-campaign");
+  });
+
+  it("does not queue a comment whose retry is already scheduled", async () => {
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      {
+        commentId: "old",
+        status: "PENDING",
+        attempts: 0,
+        dmDeliveryUnconfirmed: false,
+        errorMessage: "Retry scheduled: paced to protect the account",
+        updatedAt: new Date(),
+        publicReplySentAt: new Date(),
+      },
+    ]);
+    await reconcileComments();
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    expect(queueAdd.mock.calls[0][1].commentId).toBe("new");
+  });
 });
