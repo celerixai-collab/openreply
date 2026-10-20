@@ -31,12 +31,43 @@ interface AccountRow {
 
 interface Settings {
   enabled: boolean;
+  mode: "draft" | "auto";
   role: string;
   voice: string;
   guardrails: string;
+  goals: string;
   knowledge: string;
   disclosureText: string;
+  humanPauseHours: number;
   dailyDraftCapPerPerson: number;
+}
+
+// Exactly the fields PATCH /api/ai/settings accepts.
+function settingsBody(form: Settings) {
+  const {
+    enabled,
+    mode,
+    role,
+    voice,
+    guardrails,
+    goals,
+    knowledge,
+    disclosureText,
+    humanPauseHours,
+    dailyDraftCapPerPerson,
+  } = form;
+  return {
+    enabled,
+    mode,
+    role,
+    voice,
+    guardrails,
+    goals,
+    knowledge,
+    disclosureText,
+    humanPauseHours,
+    dailyDraftCapPerPerson,
+  };
 }
 
 interface SettingsPayload {
@@ -180,7 +211,9 @@ export default function AiAssistantPage() {
       </div>
 
       <p className="text-xs text-muted">
-        {t("Draft mode: the AI writes a suggested reply to DMs that no campaign answered. Nothing is sent until you edit it and press Send.")}
+        {payload?.settings?.mode === "auto"
+          ? t("Auto mode: the AI answers DMs that no campaign answered by itself. Hand-offs and anything it is unsure about wait here for you.")
+          : t("Draft mode: the AI writes a suggested reply to DMs that no campaign answered. Nothing is sent until you edit it and press Send.")}
       </p>
 
       {!payload || payload.accounts.length === 0 ? (
@@ -613,7 +646,7 @@ function SettingsTab({
       const res = await fetch("/api/ai/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, ...form }),
+        body: JSON.stringify({ accountId, ...settingsBody(form) }),
       });
       const data = await res.json();
       if (data.success) {
@@ -647,7 +680,12 @@ function SettingsTab({
         <ul className="list-disc space-y-1 pl-5 text-sm text-muted">
           <li>{t("Someone DMs you. If an email gate or a campaign keyword answers it, the AI stays out.")}</li>
           <li>{t("Otherwise the AI reads the recent conversation and writes a draft here, about 15 seconds after their last message.")}</li>
-          <li>{t("You edit it and press Send, or Don't reply. Nothing is sent without your approval.")}</li>
+          {form.mode === "auto" ? (
+            <li>{t("Auto mode sends the reply by itself. Collaborations, complaints, payments, anything not in your knowledge and any link not in your knowledge stay here as drafts for you.")}</li>
+          ) : (
+            <li>{t("You edit it and press Send, or Don't reply. Nothing is sent without your approval.")}</li>
+          )}
+          <li>{t("When you reply to someone yourself, in the Instagram app or here, the AI stays out of that conversation for the pause you set.")}</li>
           <li>{t("Instagram only allows replies within 24 hours of their last message; older drafts expire.")}</li>
           <li>{t("Message text is sent to Anthropic (Claude) to write drafts. It is not used to train models.")}</li>
         </ul>
@@ -676,6 +714,28 @@ function SettingsTab({
             />
           </button>
         </label>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-foreground">{t("Reply mode")}</legend>
+          {(
+            [
+              ["draft", t("Draft: you approve every reply")],
+              ["auto", t("Auto: sends replies that need no person, like ManyChat AI")],
+            ] as const
+          ).map(([value, label]) => (
+            <label key={value} className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="ai-mode"
+                value={value}
+                checked={form.mode === value}
+                disabled={!editable}
+                onChange={() => update("mode", value)}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
 
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div>
@@ -732,8 +792,17 @@ function SettingsTab({
           onChange={(value) => update("guardrails", value)}
         />
         <Field
+          label={t("Goals")}
+          hint={t("What the conversations should lead to, in order, for example “1. Join the waitlist 2. Follow the account”. The AI takes one step at a time, after answering.")}
+          value={form.goals}
+          max={AI_SETTINGS_LIMITS.goals}
+          rows={3}
+          disabled={!editable}
+          onChange={(value) => update("goals", value)}
+        />
+        <Field
           label={t("Knowledge")}
-          hint={t("Facts the assistant may use: your offers, prices, FAQs. It answers only from this and your campaigns.")}
+          hint={t("Facts the assistant may use: your offers, prices, FAQs and the links it may share. It answers only from this and your campaigns, and never sends a link that is not written here.")}
           value={form.knowledge}
           max={AI_SETTINGS_LIMITS.knowledge}
           rows={12}
@@ -749,6 +818,19 @@ function SettingsTab({
           disabled={!editable}
           onChange={(value) => update("disclosureText", value)}
         />
+        <label className="block space-y-1">
+          <span className="block text-sm font-medium text-foreground">{t("Pause after you reply (hours)")}</span>
+          <span className="block text-xs text-muted">{t("After you reply to someone yourself, the AI stays out of that conversation this long. 0: never pause.")}</span>
+          <input
+            type="number"
+            min={0}
+            max={AI_SETTINGS_LIMITS.humanPauseHoursMax}
+            value={form.humanPauseHours}
+            disabled={!editable}
+            onChange={(event) => update("humanPauseHours", Number(event.target.value))}
+            className={`${inputClass} max-w-32`}
+          />
+        </label>
         <label className="block space-y-1">
           <span className="block text-sm font-medium text-foreground">{t("Daily drafts per person")}</span>
           <span className="block text-xs text-muted">{t("Messages beyond this in 24 hours get no draft.")}</span>

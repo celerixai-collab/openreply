@@ -569,5 +569,16 @@
   "You edit it and press Send, or Don't reply. Nothing is sent without your approval.": "Você edita e toca em Enviar, ou em Não responder. Nada é enviado sem a sua aprovação.",
   "{bytes} / {max} bytes": "{bytes} / {max} bytes",
   "{count} / {max} characters": "{count} / {max} caracteres",
-  "{hours}h {minutes}m left to reply": "Faltam {hours} h {minutes} min para responder"
+  "{hours}h {minutes}m left to reply": "Faltam {hours} h {minutes} min para responder",
+  "Auto mode: the AI answers DMs that no campaign answered by itself. Hand-offs and anything it is unsure about wait here for you.": "Modo automático: a IA responde sozinha às DMs que nenhuma campanha respondeu. Encaminhamentos e o que ela não tiver certeza ficam aqui para você.",
+  "Auto mode sends the reply by itself. Collaborations, complaints, payments, anything not in your knowledge and any link not in your knowledge stay here as drafts for you.": "O modo automático envia a resposta sozinho. Parcerias, reclamações, pagamentos, o que não está na base de conhecimento e links fora dela ficam aqui como rascunhos para você.",
+  "When you reply to someone yourself, in the Instagram app or here, the AI stays out of that conversation for the pause you set.": "Quando você responde alguém pessoalmente, no app do Instagram ou aqui, a IA fica fora daquela conversa pelo tempo de pausa definido.",
+  "Reply mode": "Modo de resposta",
+  "Draft: you approve every reply": "Rascunho: você aprova cada resposta",
+  "Auto: sends replies that need no person, like ManyChat AI": "Automático: envia as respostas que não precisam de uma pessoa, como o ManyChat AI",
+  "Goals": "Objetivos",
+  "What the conversations should lead to, in order, for example “1. Join the waitlist 2. Follow the account”. The AI takes one step at a time, after answering.": "Para onde as conversas devem levar, em ordem, por exemplo “1. Entrar na lista de espera 2. Seguir a conta”. A IA dá um passo de cada vez, depois de responder.",
+  "Facts the assistant may use: your offers, prices, FAQs and the links it may share. It answers only from this and your campaigns, and never sends a link that is not written here.": "Fatos que o assistente pode usar: suas ofertas, preços, perguntas frequentes e os links que pode compartilhar. Ele responde só com base nisso e nas suas campanhas, e nunca envia um link que não esteja escrito aqui.",
+  "Pause after you reply (hours)": "Pausa depois que você responde (horas)",
+  "After you reply to someone yourself, the AI stays out of that conversation this long. 0: never pause.": "Depois que você responde alguém pessoalmente, a IA fica fora daquela conversa por esse tempo. 0: nunca pausar."
 }

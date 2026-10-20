@@ -7,6 +7,8 @@ const h = vi.hoisted(() => {
   const drafts: Row[] = [];
   const claims = new Set<string>();
   const lists = new Map<string, string[]>();
+  const keys = new Map<string, string>();
+  const sets = new Map<string, Set<string>>();
   let seq = 0;
 
   function matches(row: Row, where: Row = {}): boolean {
@@ -78,15 +80,19 @@ const h = vi.hoisted(() => {
     drafts,
     claims,
     lists,
+    keys,
+    sets,
     reset() {
       drafts.length = 0;
       claims.clear();
       lists.clear();
+      keys.clear();
+      sets.clear();
       seq = 0;
     },
     mockPrisma: {
       aiDraft,
-      instagramAccount: { findUnique: vi.fn() },
+      instagramAccount: { findUnique: vi.fn(), findFirst: vi.fn() },
       contact: { findUnique: vi.fn() },
       automation: { findMany: vi.fn() },
       postbackDelivery: {
@@ -106,6 +112,21 @@ const h = vi.hoisted(() => {
       ltrim: vi.fn(async (key: string, start: number) => {
         lists.set(key, (lists.get(key) ?? []).slice(start));
       }),
+      exists: vi.fn(async (key: string) => (keys.has(key) ? 1 : 0)),
+      set: vi.fn(async (key: string, value: string) => {
+        keys.set(key, value);
+        return "OK";
+      }),
+      sadd: vi.fn(async (key: string, ...members: string[]) => {
+        const set = sets.get(key) ?? new Set<string>();
+        members.forEach((member) => set.add(member));
+        sets.set(key, set);
+        return members.length;
+      }),
+      sismember: vi.fn(async (key: string, member: string) =>
+        sets.get(key)?.has(member) ? 1 : 0
+      ),
+      expire: vi.fn(async () => 1),
     },
     mockFindConversation: vi.fn(),
     mockGetMessages: vi.fn(),
@@ -135,11 +156,12 @@ vi.mock("@/lib/ai/queue", async (importOriginal) => ({
 }));
 
 import { MetaApiError, PermissionError } from "@/lib/meta/client";
-import { processAiDraft, processSendAiDraft } from "../lib/ai/worker";
+import { processAiDraft, processAiEcho, processSendAiDraft } from "../lib/ai/worker";
+import { recordBotSend } from "../lib/ai/takeover";
 import { requestDraftSend, dismissDraft, expireStaleAiDrafts } from "../lib/ai/drafts";
 import { burstKey } from "../lib/ai/trigger";
 
-const DISCLOSURE = "（我是 AI 小助理，訊息經過本人確認後送出）";
+const DISCLOSURE = "（我是 AI 小助理，需要時本人會親自回覆你）";
 const NOW = new Date("2026-10-09T10:01:00.000Z");
 
 const assistant = {
@@ -148,7 +170,10 @@ const assistant = {
   role: "Leo 的小助理",
   voice: "親切",
   guardrails: "",
-  knowledge: "線上課程 NT$1,200",
+  knowledge: "線上課程 NT$1,200，報名：https://example.com/join",
+  goals: "",
+  mode: "draft",
+  humanPauseHours: 12,
   disclosureText: DISCLOSURE,
   dailyDraftCapPerPerson: 10,
 };
@@ -539,5 +564,116 @@ describe("processSendAiDraft", () => {
     expect(h.drafts[0].status).toBe("SENDING");
     expect(String(h.drafts[0].error)).toMatch(/unconfirmed/i);
     expect(h.claims.has("ai-draft-send:draft_x")).toBe(true);
+  });
+});
+
+describe("auto mode, human takeover and links", () => {
+  // requestDraftSend reads the account's disclosure through the relation.
+  function withAccountRelation() {
+    const original = h.mockPrisma.aiDraft.findFirst.getMockImplementation()!;
+    h.mockPrisma.aiDraft.findFirst.mockImplementation(async (args: { where: Row }) => {
+      const row = await original(args);
+      return row ? { ...row, instagramAccount: { aiAssistant: { disclosureText: DISCLOSURE } } } : null;
+    });
+  }
+
+  function autoAccount(overrides: Record<string, unknown> = {}) {
+    h.mockPrisma.instagramAccount.findUnique.mockResolvedValue({
+      ...account,
+      aiAssistant: { ...assistant, mode: "auto", ...overrides },
+    });
+  }
+
+  it("sends a reply that needs no person right away in auto mode", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      autoAccount();
+      withAccountRelation();
+      seedBurst(["mid_2", "還有優惠嗎？"]);
+
+      await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("sent");
+
+      expect(h.drafts[0]).toMatchObject({
+        status: "SENDING",
+        finalText: `${DISCLOSURE}\n課程是 NT$1,200 喔！`,
+      });
+      expect(h.mockQueueAdd).toHaveBeenCalledWith(
+        "send-ai-draft",
+        { draftId: h.drafts[0].id },
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a hand-off as a draft for the creator in auto mode", async () => {
+    autoAccount();
+    create = vi.fn(async () =>
+      claudeReply({ intent: "collab_or_business", needs_human: true, handoff_reason: "合作邀約" })
+    );
+    seedBurst(["mid_2", "想談業配"]);
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("created");
+
+    expect(h.drafts[0]).toMatchObject({ status: "PENDING", needsHuman: true });
+    expect(h.mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it("never sends a link the knowledge does not contain", async () => {
+    autoAccount();
+    create = vi.fn(async () =>
+      claudeReply({ reply_text: "這裡報名 https://evil.example/phish", intent: "link_request" })
+    );
+    seedBurst(["mid_2", "連結？"]);
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("created");
+
+    expect(h.drafts[0]).toMatchObject({ status: "PENDING", needsHuman: true });
+    expect(h.drafts[0].handoffReason).toContain("連結");
+  });
+
+  it("may share a link copied from the knowledge", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      autoAccount();
+      withAccountRelation();
+      create = vi.fn(async () =>
+        claudeReply({ reply_text: "從這裡報名：https://example.com/join", intent: "link_request" })
+      );
+      seedBurst(["mid_2", "怎麼報名？"]);
+
+      await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("sent");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses a conversation the creator answered by hand, and drops its pending draft", async () => {
+    vi.stubEnv("REDIS_URL", "redis://test");
+    h.mockPrisma.instagramAccount.findFirst.mockResolvedValue({
+      id: "acct_1",
+      aiAssistant: { enabled: true, humanPauseHours: 12 },
+    });
+    seedBurst(["mid_2", "還有優惠嗎？"]);
+    await processAiDraft(job("mid_2"), deps());
+    expect(h.drafts[0].status).toBe("PENDING");
+
+    // OpenReply's own message is recognised by its id or its text.
+    await recordBotSend("ig_456", { messageId: "bot_mid", text: "連結在這裡 👇" });
+    const echo = (messageId: string, messageText: string) => ({
+      data: { instagramAccountId: "ig_456", recipientId: "fan_1", messageId, messageText },
+    });
+    await expect(processAiEcho(echo("bot_mid", "anything"))).resolves.toBe("bot");
+    await expect(processAiEcho(echo("other_mid", "連結在這裡  👇"))).resolves.toBe("bot");
+    await expect(processAiEcho(echo("tpl_mid", ""))).resolves.toBe("skipped");
+
+    // Anything else was typed by the creator.
+    await expect(processAiEcho(echo("leo_mid", "我直接回你喔"))).resolves.toBe("paused");
+    expect(h.drafts[0].status).toBe("SUPERSEDED");
+
+    seedBurst(["mid_3", "好喔"]);
+    await expect(processAiDraft(job("mid_3"), deps())).resolves.toBe("paused");
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

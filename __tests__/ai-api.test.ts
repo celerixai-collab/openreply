@@ -162,7 +162,7 @@ describe("settings", () => {
       worker: { healthy: true, aiConfigured: true },
       settings: { enabled: false, model: "claude-haiku-5-5", mode: "draft", dailyDraftCapPerPerson: 10 },
     });
-    expect(body.data.settings.disclosureText).toBe("（我是 AI 小助理，訊息經過本人確認後送出）");
+    expect(body.data.settings.disclosureText).toBe("（我是 AI 小助理，需要時本人會親自回覆你）");
   });
 
   it("reports an unknown key status for a worker that predates the assistant", async () => {

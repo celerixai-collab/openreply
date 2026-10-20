@@ -1,7 +1,9 @@
 /**
- * The AI assistant's worker: writes drafts (ai-draft) and delivers approved
- * ones (send-ai-draft). Draft mode only - nothing reaches Instagram without a
- * person approving it in the dashboard.
+ * The AI assistant's worker: writes drafts (ai-draft), delivers approved
+ * ones (send-ai-draft) and steps back when the creator replies by hand
+ * (ai-echo). In draft mode nothing reaches Instagram without a person
+ * approving it; in auto mode a draft that needs no person is approved by
+ * the worker itself, through the same checks as a click in the dashboard.
  */
 
 import { UnrecoverableError, Worker, type Job } from "bullmq";
@@ -19,7 +21,9 @@ import {
   sendDirectMessage,
 } from "@/lib/instagram/provider";
 import { claimOnce } from "@/lib/contacts/contacts";
-import { AI_MODEL, DM_WINDOW_MS } from "./constants";
+import { AI_MODE_AUTO, AI_MODEL, DM_WINDOW_MS } from "./constants";
+import { requestDraftSend } from "./drafts";
+import { isAiPaused, isBotSend, pauseAiFor } from "./takeover";
 import { getAnthropicClient, isAiConfigured, type AnthropicMessagesClient } from "./client";
 import {
   classifyAnthropicError,
@@ -30,9 +34,11 @@ import { loadConversationHistory, type LoadedTurn } from "./history";
 import { buildSystemBlocks, buildUserMessage, type HistoryTurn } from "./prompt";
 import {
   AI_DRAFT_JOB_NAME,
+  AI_ECHO_JOB_NAME,
   AI_QUEUE_NAME,
   SEND_AI_DRAFT_JOB_NAME,
   type AiDraftJob,
+  type AiEchoJob,
   type AiQueueJob,
   type SendAiDraftJob,
 } from "./queue";
@@ -63,7 +69,9 @@ export type DraftOutcome =
   | "superseded"
   | "answered"
   | "capped"
+  | "paused"
   | "created"
+  | "sent"
   | "failed";
 
 /**
@@ -119,6 +127,13 @@ export async function processAiDraft(
     );
     await clearBurstThrough(account.id, igsid, burst, messageId);
     return "capped";
+  }
+
+  // The creator took this conversation over: stay out until the pause ends.
+  if (await isAiPaused(account.id, igsid)) {
+    console.log(`[AI Worker] Paused for a person on account ${account.id}: the creator replied`);
+    await clearBurstThrough(account.id, igsid, burst, messageId);
+    return "paused";
   }
 
   const contact = await prisma.contact.findUnique({
@@ -217,6 +232,7 @@ export async function processAiDraft(
     draft = finalizeDraft(generated, {
       disclosureText: assistant.disclosureText,
       firstReply,
+      knowledge: assistant.knowledge,
     });
   } catch (error) {
     const failure = classifyAnthropicError(error);
@@ -234,8 +250,9 @@ export async function processAiDraft(
   }
 
   const now = new Date();
+  let createdId: string;
   try {
-    await prisma.$transaction([
+    const [, created] = await prisma.$transaction([
       // One open draft per person: an older one no longer answers the
       // conversation as it stands.
       prisma.aiDraft.updateMany({
@@ -255,14 +272,64 @@ export async function processAiDraft(
           outputTokens: draft.usage.outputTokens,
           cacheReadTokens: draft.usage.cacheReadTokens,
         },
+        select: { id: true },
       }),
     ]);
+    createdId = created.id;
   } catch (error) {
     if (isUniqueViolation(error)) return "duplicate";
     throw error;
   }
   await clearBurstThrough(account.id, igsid, burst, messageId);
+
+  // Auto mode: a reply that needs no person goes out now, through the same
+  // checks (window, length, one send) as approving it in the dashboard.
+  // Hand-offs, low confidence and stray links stay drafts for the creator.
+  if (assistant.mode === AI_MODE_AUTO && !draft.needsHuman && draft.replyText) {
+    const result = await requestDraftSend({
+      workspaceId: account.workspaceId,
+      draftId: createdId,
+      text: draft.replyText,
+    });
+    if (result.ok) return "sent";
+    console.warn(`[AI Worker] Auto-send held back (${result.code}): ${result.error}`);
+  }
   return "created";
+}
+
+export type EchoOutcome = "skipped" | "bot" | "paused";
+
+/**
+ * A message the account sent. OpenReply's own sends are recorded when they
+ * go out; anything else was typed by the creator, so the AI steps back from
+ * that conversation and drops the drafts waiting there.
+ */
+export async function processAiEcho(
+  job: Pick<Job<AiEchoJob>, "data">
+): Promise<EchoOutcome> {
+  const { instagramAccountId, recipientId, messageId, messageText } = job.data;
+  // Templates and attachments carry no text: OpenReply's buttons and links
+  // arrive that way, so they never count as the creator typing.
+  if (!messageText.trim()) return "skipped";
+
+  const account = await prisma.instagramAccount.findFirst({
+    where: { instagramId: instagramAccountId, provider: "META" },
+    select: { id: true, aiAssistant: { select: { enabled: true, humanPauseHours: true } } },
+  });
+  const assistant = account?.aiAssistant;
+  if (!account || !assistant?.enabled || assistant.humanPauseHours <= 0) return "skipped";
+
+  if (await isBotSend(instagramAccountId, { messageId, text: messageText })) return "bot";
+
+  await pauseAiFor(account.id, recipientId, assistant.humanPauseHours);
+  await prisma.aiDraft.updateMany({
+    where: { instagramAccountId: account.id, igsid: recipientId, status: "PENDING" },
+    data: { status: "SUPERSEDED", decidedAt: new Date() },
+  });
+  console.log(
+    `[AI Worker] The creator replied by hand on account ${account.id}; AI paused for ${assistant.humanPauseHours}h in that conversation`
+  );
+  return "paused";
 }
 
 export type SendOutcome = "skipped" | "sent" | "failed" | "already_claimed";
@@ -344,6 +411,10 @@ export async function processAiJob(
   }
   if (job.name === SEND_AI_DRAFT_JOB_NAME) {
     await processSendAiDraft(job as Job<SendAiDraftJob>);
+    return;
+  }
+  if (job.name === AI_ECHO_JOB_NAME) {
+    await processAiEcho(job as Job<AiEchoJob>);
   }
 }
 

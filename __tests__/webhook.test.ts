@@ -9,6 +9,7 @@ import {
   verifyWebhookSignature,
   parseCommentEvents,
   parseMessageEvents,
+  parseEchoEvents,
   parseReadEvents,
   redactEmailsForStorage,
 } from "../lib/meta/webhook";
@@ -622,5 +623,41 @@ describe("redactEmailsForStorage", () => {
       messageText: "leo@gmail.com",
       fromQuickReply: true,
     });
+  });
+});
+
+describe("parseEchoEvents", () => {
+  it("returns the account's own messages, which parseMessageEvents drops", () => {
+    const payload = {
+      object: "instagram",
+      entry: [
+        {
+          id: "ig_456",
+          time: 0,
+          messaging: [
+            {
+              sender: { id: "ig_456" },
+              recipient: { id: "fan_1" },
+              message: { mid: "mid_echo", text: " 我直接回你 ", is_echo: true },
+            },
+            {
+              sender: { id: "ig_456" },
+              recipient: { id: "fan_1" },
+              message: { mid: "mid_template", is_echo: true },
+            },
+            {
+              sender: { id: "fan_1" },
+              recipient: { id: "ig_456" },
+              message: { mid: "mid_in", text: "hi" },
+            },
+          ],
+        },
+      ],
+    };
+    expect(parseEchoEvents(payload)).toEqual([
+      { instagramAccountId: "ig_456", recipientId: "fan_1", messageId: "mid_echo", messageText: "我直接回你" },
+      { instagramAccountId: "ig_456", recipientId: "fan_1", messageId: "mid_template", messageText: "" },
+    ]);
+    expect(parseMessageEvents(payload).map((event) => event.messageId)).toEqual(["mid_in"]);
   });
 });

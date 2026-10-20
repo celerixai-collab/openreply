@@ -569,5 +569,16 @@
   "You edit it and press Send, or Don't reply. Nothing is sent without your approval.": "你可以修改後按「送出」，或按「不回」。沒有你的確認，什麼都不會送出。",
   "{bytes} / {max} bytes": "{bytes} / {max} 位元組",
   "{count} / {max} characters": "{count} / {max} 字",
-  "{hours}h {minutes}m left to reply": "剩 {hours} 小時 {minutes} 分可回覆"
+  "{hours}h {minutes}m left to reply": "剩 {hours} 小時 {minutes} 分可回覆",
+  "Auto mode: the AI answers DMs that no campaign answered by itself. Hand-offs and anything it is unsure about wait here for you.": "自動模式：沒有被活動回覆的私訊，由 AI 直接回覆。需要你處理或 AI 沒把握的，會留在這裡等你。",
+  "Auto mode sends the reply by itself. Collaborations, complaints, payments, anything not in your knowledge and any link not in your knowledge stay here as drafts for you.": "自動模式會直接送出回覆。合作、客訴、付款、知識庫沒有的內容，以及知識庫沒有的連結，都會留在這裡等你處理。",
+  "When you reply to someone yourself, in the Instagram app or here, the AI stays out of that conversation for the pause you set.": "你親自回覆某個人時（在 IG App 或這裡），AI 會在你設定的時間內不插手那段對話。",
+  "Reply mode": "回覆模式",
+  "Draft: you approve every reply": "草稿：每則回覆都由你確認",
+  "Auto: sends replies that need no person, like ManyChat AI": "自動：不需要你處理的回覆直接送出（類似 ManyChat AI）",
+  "Goals": "對話目標",
+  "What the conversations should lead to, in order, for example “1. Join the waitlist 2. Follow the account”. The AI takes one step at a time, after answering.": "對話要帶向哪裡，依優先順序寫，例如「1. 加入候補名單 2. 追蹤帳號」。AI 會先回答問題，再一次推進一步。",
+  "Facts the assistant may use: your offers, prices, FAQs and the links it may share. It answers only from this and your campaigns, and never sends a link that is not written here.": "AI 可以使用的資料：商品、價格、常見問題，以及可以分享的連結。AI 只根據這裡和你的活動回答，這裡沒寫的連結一律不會送出。",
+  "Pause after you reply (hours)": "你親自回覆後暫停（小時）",
+  "After you reply to someone yourself, the AI stays out of that conversation this long. 0: never pause.": "你親自回覆某個人後，AI 在這段時間內不會插手。設為 0 表示不暫停。"
 }

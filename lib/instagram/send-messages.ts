@@ -5,7 +5,22 @@ import {
   ZernioApiError,
   ZernioDeliveryUnconfirmedError,
 } from "@/lib/zernio/client";
+import { recordBotSend } from "@/lib/ai/takeover";
 import type { InstagramContext, ZernioContext } from "./context";
+
+/**
+ * Note a message OpenReply sent through Meta, so its echo is not taken for
+ * the creator replying by hand (see lib/ai/takeover). Not awaited: it must
+ * never slow down or fail a send.
+ */
+function tracked<T extends { message_id?: string } | undefined>(
+  instagramAccountId: string,
+  text: string,
+  result: T
+): T {
+  void recordBotSend(instagramAccountId, { messageId: result?.message_id, text });
+  return result;
+}
 
 type Button =
   | { type: "url"; title: string; url: string }
@@ -87,11 +102,15 @@ export async function sendPrivateReply({
   postId?: string;
 }) {
   if (context.provider === "META")
-    return meta.sendPrivateReply(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      commentId,
-      message
+      message,
+      await meta.sendPrivateReply(
+        context.accessToken,
+        instagramAccountId,
+        commentId,
+        message
+      )
     );
   return sendZernioMessage({ context, commentId, postId, text: message });
 }
@@ -114,13 +133,17 @@ export async function sendPrivateReplyWithButton({
   postId?: string;
 }) {
   if (context.provider === "META")
-    return meta.sendPrivateReplyWithButton(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      commentId,
       text,
-      buttonTitle,
-      payload
+      await meta.sendPrivateReplyWithButton(
+        context.accessToken,
+        instagramAccountId,
+        commentId,
+        text,
+        buttonTitle,
+        payload
+      )
     );
   return sendZernioMessage({
     context,
@@ -147,13 +170,17 @@ export async function sendDirectMessageWithButton({
   payload: string;
 }) {
   if (context.provider === "META")
-    return meta.sendDirectMessageWithButton(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      userId,
       text,
-      buttonTitle,
-      payload
+      await meta.sendDirectMessageWithButton(
+        context.accessToken,
+        instagramAccountId,
+        userId,
+        text,
+        buttonTitle,
+        payload
+      )
     );
   return sendZernioMessage({
     context,
@@ -179,12 +206,16 @@ export async function sendPrivateReplyWithLinkButton({
   postId?: string;
 }) {
   if (context.provider === "META")
-    return meta.sendPrivateReplyWithLinkButton(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      commentId,
       text,
-      buttons
+      await meta.sendPrivateReplyWithLinkButton(
+        context.accessToken,
+        instagramAccountId,
+        commentId,
+        text,
+        buttons
+      )
     );
   return sendZernioMessage({
     context,
@@ -207,11 +238,15 @@ export async function sendDirectMessage({
   message: string;
 }) {
   if (context.provider === "META")
-    return meta.sendDirectMessage(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      userId,
-      message
+      message,
+      await meta.sendDirectMessage(
+        context.accessToken,
+        instagramAccountId,
+        userId,
+        message
+      )
     );
   return sendZernioMessage({ context, recipientId: userId, text: message });
 }
@@ -248,12 +283,16 @@ export async function sendDirectMessageWithEmailQuickReply({
   message: string;
 }) {
   if (context.provider === "META")
-    return meta.sendDirectMessageWithEmailQuickReply(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      userId,
       message,
-      EMAIL_QUICK_REPLY_PAYLOAD
+      await meta.sendDirectMessageWithEmailQuickReply(
+        context.accessToken,
+        instagramAccountId,
+        userId,
+        message,
+        EMAIL_QUICK_REPLY_PAYLOAD
+      )
     );
   return sendZernioMessage({ context, recipientId: userId, text: message });
 }
@@ -272,12 +311,16 @@ export async function sendDirectMessageWithLinkButton({
   buttons: meta.LinkButton[];
 }) {
   if (context.provider === "META")
-    return meta.sendDirectMessageWithLinkButton(
-      context.accessToken,
+    return tracked(
       instagramAccountId,
-      userId,
       text,
-      buttons
+      await meta.sendDirectMessageWithLinkButton(
+        context.accessToken,
+        instagramAccountId,
+        userId,
+        text,
+        buttons
+      )
     );
   return sendZernioMessage({
     context,

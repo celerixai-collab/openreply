@@ -9,9 +9,15 @@ export const AI_MODEL = "claude-haiku-5-5";
 export const AI_MODEL_LABEL = "Claude Haiku 5.5";
 
 export const AI_MODE_DRAFT = "draft";
+// Replies that need no person are sent right away; the rest stay drafts.
+export const AI_MODE_AUTO = "auto";
+export const AI_MODES = [AI_MODE_DRAFT, AI_MODE_AUTO] as const;
+export type AiMode = (typeof AI_MODES)[number];
+
+export const DEFAULT_HUMAN_PAUSE_HOURS = 12;
 
 export const DEFAULT_DISCLOSURE_TEXT =
-  "（我是 AI 小助理，訊息經過本人確認後送出）";
+  "（我是 AI 小助理，需要時本人會親自回覆你）";
 export const DEFAULT_DAILY_DRAFT_CAP = 10;
 
 // Instagram only lets a business answer within 24 hours of the person's
@@ -58,6 +64,8 @@ export const AI_SETTINGS_LIMITS = {
   voice: 2000,
   guardrails: 4000,
   knowledge: 50000,
+  goals: 2000,
+  humanPauseHoursMax: 168,
   disclosureText: 200,
   dailyDraftCapMin: 1,
   dailyDraftCapMax: 100,

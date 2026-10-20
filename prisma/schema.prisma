@@ -314,6 +314,8 @@ model AiAssistant {
   /// Internal InstagramAccount.id. One assistant per account.
   instagramAccountId     String   @unique
   enabled                Boolean  @default(false)
+  /// "draft": every reply waits for approval. "auto": replies that need no
+  /// person are sent right away; the rest wait as drafts.
   mode                   String   @default("draft")
   model                  String   @default("claude-haiku-5-5")
   /// Who the assistant speaks for, how it sounds, what it must not do, and
@@ -322,8 +324,14 @@ model AiAssistant {
   voice                  String   @default("")
   guardrails             String   @default("")
   knowledge              String   @default("")
+  /// What the conversations should lead to (join the waitlist, leave an
+  /// email, follow), in order of priority.
+  goals                  String   @default("")
   /// Put in front of the first AI reply a person receives.
-  disclosureText         String   @default("（我是 AI 小助理，訊息經過本人確認後送出）")
+  disclosureText         String   @default("（我是 AI 小助理，需要時本人會親自回覆你）")
+  /// After the creator replies to someone by hand, the AI stays out of that
+  /// conversation this long. 0: never pause.
+  humanPauseHours        Int      @default(12)
   /// Drafts one person can trigger in 24 hours; later messages get none.
   dailyDraftCapPerPerson Int      @default(10)
   createdAt              DateTime @default(now())

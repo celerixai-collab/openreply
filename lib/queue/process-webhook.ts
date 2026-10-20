@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client';
 import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from '@/lib/queue/client';
-import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents, redactEmailsForStorage } from '@/lib/meta/webhook';
+import { parseCommentEvents, parseEchoEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents, redactEmailsForStorage } from '@/lib/meta/webhook';
+import { AI_ECHO_DELAY_MS, AI_ECHO_JOB_NAME, aiEchoJobId, getAiQueue } from '@/lib/ai/queue';
 import { Prisma, type InstagramProvider } from '@/app/generated/prisma/client';
 
 const OPENING_DM_READ_FALLBACK_DELAY_MS = 5 * 60 * 1000;
@@ -126,6 +127,31 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
         await prisma.webhookEvent.update({
           where: { id: webhookEvent.id },
           data: { workspaceId: account.workspaceId },
+        });
+      }
+    }
+
+    // Messages the account sent: if the creator typed one in the Instagram
+    // app, the AI assistant steps back from that conversation. Only accounts
+    // with the assistant switched on are checked.
+    const echoEvents = parseEchoEvents(
+      payload as Parameters<typeof parseEchoEvents>[0]
+    );
+    if (echoEvents.length) {
+      const withAi = new Set(
+        (
+          await prisma.aiAssistant.findMany({
+            where: { enabled: true, instagramAccountId: { in: accounts.map(a => a.id) } },
+            select: { instagramAccountId: true },
+          })
+        ).map(row => row.instagramAccountId)
+      );
+      for (const event of echoEvents) {
+        const account = accountMap.get(event.instagramAccountId);
+        if (!account || !withAi.has(account.id)) continue;
+        await getAiQueue().add(AI_ECHO_JOB_NAME, event, {
+          jobId: aiEchoJobId(event.instagramAccountId, event.messageId),
+          delay: AI_ECHO_DELAY_MS,
         });
       }
     }

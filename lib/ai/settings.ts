@@ -1,13 +1,16 @@
 import { z } from "zod";
-import { AI_SETTINGS_LIMITS as L, utf8ByteLength } from "./constants";
+import { AI_MODES, AI_SETTINGS_LIMITS as L, utf8ByteLength } from "./constants";
 
 const text = (max: number) => z.string().max(max).transform((value) => value.trim());
 
-// Mode and model are not settable in v1: draft mode on Claude Haiku 5.5.
+// The model is not settable in v1: Claude Haiku 5.5.
 const AiSettingsPatch = z
   .object({
     accountId: z.string().min(1),
     enabled: z.boolean().optional(),
+    mode: z.enum(AI_MODES).optional(),
+    goals: text(L.goals).optional(),
+    humanPauseHours: z.number().int().min(0).max(L.humanPauseHoursMax).optional(),
     role: text(L.role).optional(),
     voice: text(L.voice).optional(),
     guardrails: text(L.guardrails).optional(),

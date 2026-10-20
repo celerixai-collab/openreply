@@ -10,6 +10,7 @@ import {
   AI_MODE_DRAFT,
   DEFAULT_DAILY_DRAFT_CAP,
   DEFAULT_DISCLOSURE_TEXT,
+  DEFAULT_HUMAN_PAUSE_HOURS,
 } from "@/lib/ai/constants";
 import { parseAiSettingsPatch } from "@/lib/ai/settings";
 
@@ -24,7 +25,9 @@ const SETTINGS_SELECT = {
   voice: true,
   guardrails: true,
   knowledge: true,
+  goals: true,
   disclosureText: true,
+  humanPauseHours: true,
   dailyDraftCapPerPerson: true,
   updatedAt: true,
 } as const;
@@ -37,7 +40,9 @@ const DEFAULT_SETTINGS = {
   voice: "",
   guardrails: "",
   knowledge: "",
+  goals: "",
   disclosureText: DEFAULT_DISCLOSURE_TEXT,
+  humanPauseHours: DEFAULT_HUMAN_PAUSE_HOURS,
   dailyDraftCapPerPerson: DEFAULT_DAILY_DRAFT_CAP,
   updatedAt: null,
 };

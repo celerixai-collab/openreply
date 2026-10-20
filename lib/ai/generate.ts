@@ -191,24 +191,51 @@ export async function generateDraftReply({
   };
 }
 
+// Anything that reads as a link: a URL, or a bare domain with a path.
+const LINK_PATTERN =
+  /\bhttps?:\/\/[^\s<>"'「」（）()【】，。！？]+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\/[^\s<>"'「」（）()【】，。！？]*/gi;
+
+function trimLink(link: string): string {
+  return link.replace(/[.,;:!?)\]}'"]+$/, "");
+}
+
+/** Links in `text` that do not appear, character for character, in `allowed`. */
+export function unknownLinks(text: string, allowed: string): string[] {
+  const known = allowed.toLowerCase();
+  return (text.match(LINK_PATTERN) ?? [])
+    .map(trimLink)
+    .filter((link) => link && !known.includes(link.toLowerCase()));
+}
+
 /**
  * Code has the last word on hand-offs, and the reply is cut so that, with
  * the disclosure in front of a first reply, it fits Instagram's 1000 bytes.
+ * A link the creator's knowledge does not contain is never sent on the
+ * model's word: the draft goes to the creator instead.
  */
 export function finalizeDraft(
   draft: GeneratedDraft,
-  { disclosureText, firstReply }: { disclosureText: string; firstReply: boolean }
+  {
+    disclosureText,
+    firstReply,
+    knowledge = "",
+  }: { disclosureText: string; firstReply: boolean; knowledge?: string }
 ): GeneratedDraft {
+  const strayLinks = unknownLinks(draft.replyText, knowledge);
   const needsHuman =
     draft.needsHuman ||
     HANDOFF_INTENTS.includes(draft.intent) ||
-    draft.confidence === "low";
+    draft.confidence === "low" ||
+    strayLinks.length > 0;
   const reserved = utf8ByteLength(composeOutgoingText("", disclosureText, firstReply));
   const budget = Math.max(0, MAX_DM_TEXT_BYTES - reserved);
   return {
     ...draft,
     replyText: truncateToUtf8Bytes(draft.replyText, budget).trim(),
     needsHuman,
-    handoffReason: needsHuman ? draft.handoffReason : null,
+    handoffReason: needsHuman
+      ? (draft.handoffReason ??
+        (strayLinks.length ? "回覆裡有大腦資料以外的連結，請確認" : null))
+      : null,
   };
 }

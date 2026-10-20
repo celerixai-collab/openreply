@@ -10,6 +10,11 @@ import { getRedisConnection } from "@/lib/queue/client";
 export const AI_QUEUE_NAME = "ai-drafts";
 export const AI_DRAFT_JOB_NAME = "ai-draft";
 export const SEND_AI_DRAFT_JOB_NAME = "send-ai-draft";
+export const AI_ECHO_JOB_NAME = "ai-echo";
+
+// An echo is checked this long after it arrives, so the record of a message
+// OpenReply sent (written right after the send returns) is in place first.
+export const AI_ECHO_DELAY_MS = 20_000;
 
 // A burst of messages from one person gets one draft: each message's job
 // waits this long, and only the job for the newest message writes it.
@@ -42,7 +47,19 @@ export interface SendAiDraftJob {
   draftId: string;
 }
 
-export type AiQueueJob = AiDraftJob | SendAiDraftJob;
+/** A message the account sent: did the creator type it themselves? */
+export interface AiEchoJob {
+  instagramAccountId: string;
+  recipientId: string;
+  messageId: string;
+  messageText: string;
+}
+
+export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob;
+
+export function aiEchoJobId(instagramAccountId: string, messageId: string): string {
+  return `ai-echo_${instagramAccountId}_${Buffer.from(messageId).toString("base64url")}`;
+}
 
 // BullMQ forbids ":" in custom job ids and Instagram mids can contain it;
 // base64url is injective and uses only allowed characters.

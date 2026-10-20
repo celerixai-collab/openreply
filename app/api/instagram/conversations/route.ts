@@ -7,6 +7,8 @@ import {
   MetaApiError,
 } from "@/lib/instagram/provider";
 import { createInstagramContext } from "@/lib/instagram/provider";
+import { prisma } from "@/lib/db/client";
+import { pauseAiFor } from "@/lib/ai/takeover";
 
 export interface ConversationListItem {
   id: string;
@@ -150,6 +152,9 @@ export async function POST(request: NextRequest) {
       userId: body.recipientId,
       message: text,
     });
+    // The creator answered by hand: the AI assistant steps back from this
+    // conversation, as it does for a reply typed in the Instagram app.
+    await pauseForHumanReply(account.id, body.recipientId);
     return NextResponse.json({ success: true, data: result });
   } catch (err) {
     console.error("[Conversations] Send error:", err);
@@ -161,5 +166,22 @@ export async function POST(request: NextRequest) {
       { success: false, error: message },
       { status: 502 }
     );
+  }
+}
+
+async function pauseForHumanReply(accountId: string, recipientId: string) {
+  try {
+    const assistant = await prisma.aiAssistant.findUnique({
+      where: { instagramAccountId: accountId },
+      select: { enabled: true, humanPauseHours: true },
+    });
+    if (!assistant?.enabled) return;
+    await pauseAiFor(accountId, recipientId, assistant.humanPauseHours);
+    await prisma.aiDraft.updateMany({
+      where: { instagramAccountId: accountId, igsid: recipientId, status: "PENDING" },
+      data: { status: "SUPERSEDED", decidedAt: new Date() },
+    });
+  } catch (error) {
+    console.warn("[Conversations] Could not pause the AI assistant:", error);
   }
 }

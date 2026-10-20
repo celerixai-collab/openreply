@@ -58,7 +58,7 @@ function fakeClient(result: Anthropic.Message | Error) {
 }
 
 const system = buildSystemBlocks(
-  { role: "Leo 的小助理", voice: "親切", guardrails: "不談政治", knowledge: "課程 NT$1,200" },
+  { role: "Leo 的小助理", voice: "親切", guardrails: "不談政治", knowledge: "課程 NT$1,200", goals: "" },
   []
 );
 
@@ -191,7 +191,7 @@ describe("prompt", () => {
     expect(system[1].text).toContain("課程 NT$1,200");
     // Same settings, same bytes: the cache prefix is stable.
     expect(
-      buildSystemBlocks({ role: "Leo 的小助理", voice: "親切", guardrails: "不談政治", knowledge: "課程 NT$1,200" }, [])
+      buildSystemBlocks({ role: "Leo 的小助理", voice: "親切", guardrails: "不談政治", knowledge: "課程 NT$1,200", goals: "" }, [])
     ).toEqual(system);
   });
 

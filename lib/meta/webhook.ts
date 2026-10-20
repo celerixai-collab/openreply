@@ -100,6 +100,17 @@ export interface WebhookMessageEvent {
   fromQuickReply?: boolean;
 }
 
+// A message the connected account sent (an echo): OpenReply's own sends and
+// the creator typing in the Instagram app both arrive this way.
+export interface WebhookEchoEvent {
+  instagramAccountId: string;
+  // The person the account wrote to.
+  recipientId: string;
+  messageId: string;
+  // Empty for templates and attachments.
+  messageText: string;
+}
+
 export interface WebhookPostbackEvent {
   instagramAccountId: string;
   userId: string;
@@ -240,6 +251,38 @@ export function parseMessageEvents(
         messageText: text,
         senderId,
         ...(message.quick_reply ? { fromQuickReply: true } : {}),
+      });
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Parse echoes: messages the connected account itself sent. Only the AI
+ * assistant's human-takeover check reads these (lib/ai/takeover); they never
+ * reach the keyword campaigns.
+ */
+export function parseEchoEvents(payload: WebhookPayload): WebhookEchoEvent[] {
+  const events: WebhookEchoEvent[] = [];
+
+  if (payload.object !== "instagram") return events;
+
+  for (const entry of payload.entry ?? []) {
+    for (const messaging of entry.messaging ?? []) {
+      const message = messaging.message;
+      if (!message?.is_echo || message.is_deleted) continue;
+
+      const messageId = message.mid;
+      const accountId = entry.id ?? messaging.sender?.id;
+      const recipientId = messaging.recipient?.id;
+      if (!messageId || !accountId || !recipientId || recipientId === accountId) continue;
+
+      events.push({
+        instagramAccountId: accountId,
+        recipientId,
+        messageId,
+        messageText: message.text?.trim() ?? "",
       });
     }
   }
