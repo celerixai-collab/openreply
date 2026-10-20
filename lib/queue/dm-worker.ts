@@ -1,10 +1,15 @@
 import {
   classifySendError,
+  isInstagramThrottle,
   hasLegacyUnconfirmedDelivery,
   isConfirmedSendRejection,
   isDeliveryUnconfirmed,
 } from "@/lib/instagram/delivery-errors";
-import { claimCommentDelivery, MAX_COMMENT_SEND_ATTEMPTS } from "./comment-delivery";
+import {
+  claimCommentDelivery,
+  MAX_COMMENT_SEND_ATTEMPTS,
+  SCHEDULED_RETRY_MARK,
+} from "./comment-delivery";
 import { createHash } from "node:crypto";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
@@ -39,7 +44,14 @@ import {
   type InstagramContext,
 } from "@/lib/instagram/provider";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
-import { reserveDMSlot, releaseDMSlot } from "@/lib/utils/rate-limiter";
+import {
+  MAX_THROTTLE_RETRIES,
+  recordThrottle,
+  releaseDMSlot,
+  reserveDMSlot,
+  reservePaceSlot,
+  throttleRetryDelayMs,
+} from "@/lib/utils/rate-limiter";
 import {
   releaseWorkspaceDMReservation,
   reserveWorkspaceDMSend,
@@ -587,6 +599,33 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
+    // Pace private replies per minute, and hold them while the account cools
+    // down after Instagram throttled it. A held comment is not a failure: it
+    // waits in the queue and keeps its place in line.
+    let pace;
+    try {
+      pace = await reservePaceSlot(instagramAccountId);
+    } catch (error) {
+      console.warn("[DM Worker] Pacing unavailable, sending anyway:", formatError(error));
+      pace = { allowed: true as const };
+    }
+    if (!pace.allowed) {
+      await releaseWorkspaceDMReservation(automation.workspaceId, usage.periodStart);
+      await prisma.dmLog.update({
+        where: { automationId_commentId: { automationId: automation.id, commentId } },
+        data: {
+          status: "PENDING",
+          matchedKeyword: matchResult.matchedKeyword,
+          errorMessage: `${SCHEDULED_RETRY_MARK} paced to protect the account`,
+        },
+      });
+      await getDMQueue().add("process-comment", job.data, {
+        delay: pace.retryInMs,
+        jobId: `comment_${instagramAccountId}_${commentId}_pace_${Date.now()}`,
+      });
+      continue;
+    }
+
     let rateLimit;
     try {
       rateLimit = await reserveDMSlot(instagramAccountId, requeueAttempt);
@@ -644,7 +683,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           data: {
             status: "PENDING",
             matchedKeyword: matchResult.matchedKeyword,
-            errorMessage: "Hourly rate limit hit; retry scheduled",
+            errorMessage: `${SCHEDULED_RETRY_MARK} hourly rate limit hit`,
           },
         });
 
@@ -853,6 +892,36 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       if (isConfirmedSendRejection(sendError)) {
         if (rateLimit?.reserved) await releaseDMSlot(instagramAccountId);
         await releaseWorkspaceDMReservation(automation.workspaceId, usage.periodStart);
+      }
+      // Instagram throttled the account: nothing was delivered (a confirmed
+      // rejection), so give the attempt back and try again later, up to
+      // MAX_THROTTLE_RETRIES times, instead of giving up after three quick
+      // retries. A burst of these also pauses every private reply for a while.
+      const throttleRetry = job.data.throttleRetry ?? 0;
+      if (!delivered && isInstagramThrottle(sendError) && throttleRetry < MAX_THROTTLE_RETRIES) {
+        const tripped = await recordThrottle(instagramAccountId).catch(() => false);
+        const delay = throttleRetryDelayMs(throttleRetry);
+        await prisma.dmLog.update({
+          where: { automationId_commentId: { automationId: automation.id, commentId } },
+          data: {
+            status: "PENDING",
+            attempts: { decrement: 1 },
+            dmDeliveryUnconfirmed: false,
+            errorMessage: `${SCHEDULED_RETRY_MARK} Instagram throttled (try ${throttleRetry + 1}): ${formatError(sendError)}`.slice(0, 1000),
+          },
+        });
+        await getDMQueue().add(
+          "process-comment",
+          { ...job.data, throttleRetry: throttleRetry + 1 },
+          {
+            delay,
+            jobId: `comment_${instagramAccountId}_${commentId}_throttle_${throttleRetry + 1}`,
+          }
+        );
+        console.warn(
+          `[DM Worker] Instagram throttled a private reply; retry ${throttleRetry + 1} in ${Math.round(delay / 60_000)} min${tripped ? " (account cooling down)" : ""}`
+        );
+        continue;
       }
       await prisma.dmLog.update({
         where: { automationId_commentId: { automationId: automation.id, commentId } },

@@ -40,6 +40,22 @@ export function isConfirmedSendRejection(error: unknown): boolean {
   );
 }
 
+/**
+ * Instagram pushing back on volume rather than on this one message: its rate
+ * limits, and the "thread does not exist" rejection (code 100, subcode
+ * 2534001) it returned for about half of all private replies once an account
+ * had sent a few hundred in half an hour (2026-10-20). Both are confirmed
+ * rejections, so nothing was delivered and the send may be repeated later.
+ */
+export function isInstagramThrottle(error: unknown): boolean {
+  if (error instanceof RateLimitError) return true;
+  return (
+    error instanceof MetaApiError &&
+    (error.subcode === 2534001 ||
+      /\bsub=2534001\b|thread does not exist/i.test(error.message))
+  );
+}
+
 export function classifySendError(error: unknown): unknown {
   return isDeliveryUnconfirmed(error) || isConfirmedSendRejection(error)
     ? error

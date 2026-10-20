@@ -119,9 +119,15 @@ vi.mock("@/lib/utils/keyword-matcher", () => ({
   matchKeywords: mockMatchKeywords,
 }));
 
+const mockReservePaceSlot = vi.fn(async () => ({ allowed: true }) as { allowed: boolean; retryInMs?: number });
+const mockRecordThrottle = vi.fn(async () => false);
 vi.mock("@/lib/utils/rate-limiter", () => ({
   reserveDMSlot: mockReserveDMSlot,
   releaseDMSlot: mockReleaseDMSlot,
+  reservePaceSlot: (...args: unknown[]) => mockReservePaceSlot(...(args as [])),
+  recordThrottle: (...args: unknown[]) => mockRecordThrottle(...(args as [])),
+  MAX_THROTTLE_RETRIES: 8,
+  throttleRetryDelayMs: (retry: number) => (retry + 1) * 15 * 60_000,
 }));
 
 vi.mock("@/lib/billing/usage", () => ({
@@ -531,7 +537,7 @@ describe("DM Worker — Full Pipeline", () => {
   });
 
   it("should log FAILED, release usage, and re-throw when private reply sending fails", async () => {
-    const error = new RateLimitError("API Error");
+    const error = new MetaApiError(10, undefined, undefined, "API Error");
     mockSendPrivateReply.mockRejectedValue(error);
 
     const processor = getProcessor();
@@ -550,9 +556,80 @@ describe("DM Worker — Full Pipeline", () => {
       },
       data: expect.objectContaining({
         status: "FAILED",
-        errorMessage: "API Error",
+        errorMessage: expect.stringContaining("API Error"),
       }),
     });
+  });
+
+  it("retries a throttled private reply later instead of failing it", async () => {
+    mockSendPrivateReply.mockRejectedValue(
+      new MetaApiError(
+        100,
+        2534001,
+        undefined,
+        "The thread owner has archived or deleted this conversation, or the thread does not exist. [code=100 sub=2534001]"
+      )
+    );
+
+    await getProcessor()(createMockJob());
+
+    expect(mockRecordThrottle).toHaveBeenCalledWith("ig_456");
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "PENDING",
+          attempts: { decrement: 1 },
+          dmDeliveryUnconfirmed: false,
+          errorMessage: expect.stringMatching(/^Retry scheduled: Instagram throttled/),
+        }),
+      })
+    );
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-comment",
+      expect.objectContaining({ commentId: "comment_555", throttleRetry: 1 }),
+      expect.objectContaining({
+        delay: 15 * 60_000,
+        jobId: "comment_ig_456_comment_555_throttle_1",
+      })
+    );
+  });
+
+  it("fails a throttled private reply for good only after the last retry", async () => {
+    mockSendPrivateReply.mockRejectedValue(
+      new MetaApiError(100, 2534001, undefined, "thread does not exist [code=100 sub=2534001]")
+    );
+
+    await expect(
+      getProcessor()(createMockJob({ ...mockJobData, throttleRetry: 8 }))
+    ).rejects.toThrow("thread does not exist");
+
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it("holds a private reply over the per-minute pace and queues it for later", async () => {
+    mockReservePaceSlot.mockResolvedValueOnce({ allowed: false, retryInMs: 42_000 });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockReserveDMSlot).not.toHaveBeenCalled();
+    expect(mockReleaseWorkspaceDMReservation).toHaveBeenCalledWith("workspace_123", usagePeriodStart);
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "PENDING",
+          errorMessage: expect.stringMatching(/^Retry scheduled: paced/),
+        }),
+      })
+    );
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-comment",
+      expect.objectContaining({ commentId: "comment_555" }),
+      expect.objectContaining({ delay: 42_000 })
+    );
   });
 
   it("should handle missing access token", async () => {
@@ -2110,14 +2187,19 @@ describe("DM Worker — email gate", () => {
       expect(ttl).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000);
     });
 
-    it("does not open the gate when the ask is rejected outright", async () => {
+    it("does not open the gate when the ask is rejected outright, and retries it later", async () => {
       mockPrisma.automation.findMany.mockResolvedValue([gated]);
       mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
       mockSendPrivateReply.mockRejectedValue(new RateLimitError("slow down"));
 
-      await expect(getProcessor()(createMockJob())).rejects.toThrow("slow down");
+      await getProcessor()(createMockJob());
 
       expect(contacts[0]?.pendingEmailAutomationId ?? null).toBeNull();
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        "process-comment",
+        expect.objectContaining({ throttleRetry: 1 }),
+        expect.objectContaining({ delay: 15 * 60_000 })
+      );
     });
 
     it("skips the ask and sends the link to someone whose email is already known", async () => {

@@ -252,3 +252,89 @@ export async function resetRateLimit(
 
 // Export constants for use in tests
 export { RATE_LIMIT_MAX, RATE_LIMIT_WINDOW, REQUEUE_DELAY_MS, MAX_REQUEUE_ATTEMPTS };
+
+// ─── Pacing and throttle cooldown ──────────────────────────────────────────────
+//
+// The hourly cap above is Meta's documented ceiling, but Instagram starts
+// rejecting private replies long before it: on 2026-10-20 an account that
+// sent about 450 in 30 minutes (a backlog of days-old comments, caught up all
+// at once) had half of the next ones refused. So private replies are also
+// paced per minute, and a run of throttle errors pauses the account's sends
+// for a while instead of retrying into the wall.
+
+const PACE_PER_MINUTE = Number(process.env.DM_PACE_PER_MINUTE ?? 6);
+const THROTTLE_COOLDOWN_MS = Number(
+  process.env.DM_THROTTLE_COOLDOWN_MS ?? 15 * 60 * 1000
+);
+// A few throttle errors close together trip the cooldown; a single one may
+// be about that one person, and must not stop everyone else.
+const THROTTLE_TRIP_COUNT = 3;
+const THROTTLE_TRIP_WINDOW_SECONDS = 120;
+
+function jitterMs(maxMs: number): number {
+  return Math.floor(Math.random() * maxMs);
+}
+
+export type PaceResult = { allowed: true } | { allowed: false; retryInMs: number };
+
+/**
+ * Take one private-reply slot for this minute, unless the account is cooling
+ * down after Instagram throttled it. A refusal says when to try again, with
+ * jitter so the waiting jobs do not all wake at once.
+ */
+export async function reservePaceSlot(instagramAccountId: string): Promise<PaceResult> {
+  const client = getRedis();
+  const cooldownLeft = await client.pttl(`cooldown:dm:${instagramAccountId}`);
+  if (cooldownLeft > 0) {
+    return { allowed: false, retryInMs: cooldownLeft + jitterMs(5 * 60_000) };
+  }
+  const now = Date.now();
+  const minute = Math.floor(now / 60_000);
+  const key = `pace:dm:${instagramAccountId}:${minute}`;
+  const used = await client.incr(key);
+  if (used === 1) await client.expire(key, 120);
+  if (used > PACE_PER_MINUTE) {
+    const nextMinute = (minute + 1) * 60_000 - now;
+    // Spread the queue over the next few minutes, not all into the next one.
+    const backlogMinutes = Math.ceil((used - PACE_PER_MINUTE) / PACE_PER_MINUTE);
+    return {
+      allowed: false,
+      retryInMs: nextMinute + jitterMs(Math.max(1, backlogMinutes) * 60_000),
+    };
+  }
+  return { allowed: true };
+}
+
+/**
+ * Note a throttle error. Returns true when it tripped the cooldown, which
+ * holds every private reply from this account for the next while.
+ */
+export async function recordThrottle(instagramAccountId: string): Promise<boolean> {
+  const client = getRedis();
+  const key = `throttle:dm:${instagramAccountId}`;
+  const count = await client.incr(key);
+  if (count === 1) await client.expire(key, THROTTLE_TRIP_WINDOW_SECONDS);
+  if (count < THROTTLE_TRIP_COUNT) return false;
+  await client.set(`cooldown:dm:${instagramAccountId}`, "1", "PX", THROTTLE_COOLDOWN_MS);
+  await client.del(key);
+  return true;
+}
+
+// How long a throttled comment waits before its next try: growing, and in
+// total well inside Instagram's 7 days for a private reply.
+const THROTTLE_RETRY_DELAYS_MS = [
+  15 * 60_000,
+  30 * 60_000,
+  60 * 60_000,
+  2 * 60 * 60_000,
+  4 * 60 * 60_000,
+  8 * 60 * 60_000,
+  12 * 60 * 60_000,
+  24 * 60 * 60_000,
+];
+export const MAX_THROTTLE_RETRIES = THROTTLE_RETRY_DELAYS_MS.length;
+
+export function throttleRetryDelayMs(retry: number): number {
+  const base = THROTTLE_RETRY_DELAYS_MS[Math.min(retry, THROTTLE_RETRY_DELAYS_MS.length - 1)];
+  return base + jitterMs(5 * 60_000);
+}

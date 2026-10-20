@@ -2,6 +2,10 @@ import { prisma } from "@/lib/db/client";
 
 export const MAX_COMMENT_SEND_ATTEMPTS = 3;
 
+// Marks a DmLog whose comment already has a delayed job queued (paced,
+// throttled, over the hourly cap), so the reconciler does not queue another.
+export const SCHEDULED_RETRY_MARK = "Retry scheduled:";
+
 // A durable, atomic claim precedes the external side effect. If the process
 // crashes or the final log write fails, an uncertain send must not be repeated.
 export async function claimCommentDelivery(

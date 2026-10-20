@@ -34,6 +34,9 @@ export interface ProcessCommentJob {
   // from. Campaigns are bound to that post, so both ids have to be matched.
   originalMediaId?: string;
   requeueAttempt?: number;
+  // How many times Instagram throttled this comment's private reply; each
+  // one is retried later (see throttleRetryDelayMs) instead of failing.
+  throttleRetry?: number;
   // Which path enqueued this comment. It is not copied to ProcessedComment or
   // used for reconciliation dedup.
   source?: CommentSource;

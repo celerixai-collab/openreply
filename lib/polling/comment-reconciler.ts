@@ -25,7 +25,7 @@
  * filter on the account to widen results.
  */
 
-import { MAX_COMMENT_SEND_ATTEMPTS } from "@/lib/queue/comment-delivery";
+import { MAX_COMMENT_SEND_ATTEMPTS, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 import { hasLegacyUnconfirmedDelivery } from "@/lib/instagram/delivery-errors";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
@@ -41,9 +41,32 @@ import {
 } from "@/lib/instagram/provider";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 
-// Only consider comments from the last few days — older ones are outside
-// Instagram's private-reply window anyway, so a DM to them would just fail.
-const LOOKBACK_HOURS = Number(process.env.COMMENT_POLL_LOOKBACK_HOURS ?? 72);
+// A comment the worker already re-queued with a delay (paced, throttled or
+// over the hourly cap) has a job waiting; queueing another would only pile
+// up copies. Trusted for a little over the longest delay, in case that job
+// was lost.
+const SCHEDULED_RETRY_TRUST_MS = 26 * 60 * 60 * 1000;
+function hasScheduledRetry(log: {
+  status: string;
+  errorMessage: string | null;
+  updatedAt: Date;
+}): boolean {
+  return (
+    log.status === "PENDING" &&
+    Boolean(log.errorMessage?.startsWith(SCHEDULED_RETRY_MARK)) &&
+    Date.now() - log.updatedAt.getTime() < SCHEDULED_RETRY_TRUST_MS
+  );
+}
+
+// Instagram allows a private reply up to 7 days after the comment, so the
+// sweep looks back that far: a campaign set up days after the post still
+// reaches everyone who commented. Older comments would only fail. An env
+// value can shorten it, never stretch it past the 7 days.
+const PRIVATE_REPLY_WINDOW_HOURS = 7 * 24;
+const LOOKBACK_HOURS = Math.min(
+  PRIVATE_REPLY_WINDOW_HOURS,
+  Number(process.env.COMMENT_POLL_LOOKBACK_HOURS ?? PRIVATE_REPLY_WINDOW_HOURS)
+);
 // Hard cap on how many new comments a single campaign can enqueue per sweep, so
 // a viral post drains gradually instead of bursting into the comment API.
 const MAX_NEW_PER_SWEEP = Number(process.env.COMMENT_POLL_MAX_PER_SWEEP ?? 30);
@@ -243,7 +266,7 @@ async function sweepCampaign({
         commentId: { in: needsAction.map((c) => c.id) },
       },
       select: {
-        commentId: true, status: true, attempts: true, errorMessage: true,
+        commentId: true, status: true, attempts: true, errorMessage: true, updatedAt: true,
         dmDeliveryUnconfirmed: true, publicReplySentAt: true,
         publicReplyDeliveryUnconfirmed: true,
       },
@@ -251,6 +274,7 @@ async function sweepCampaign({
     const handledSet = new Set(logs.filter((log) => {
       const dmStopped = log.status === "SENT" || log.status === "SKIPPED_PLAN_LIMIT" ||
         log.dmDeliveryUnconfirmed || log.attempts >= MAX_COMMENT_SEND_ATTEMPTS ||
+        hasScheduledRetry(log) ||
         (log.status === "FAILED" && hasLegacyUnconfirmedDelivery(log.errorMessage));
       const replyStopped = !automation.publicReplyEnabled ||
         log.publicReplySentAt || log.publicReplyDeliveryUnconfirmed;
