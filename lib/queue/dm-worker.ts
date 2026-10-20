@@ -490,8 +490,10 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       update: {},
     });
 
-    // Public reply leg — decoupled from the DM and posted first so a DM failure
-    // (e.g. a non-follower whose messaging is restricted) never suppresses it.
+    // Public reply leg — posted only once this person has the DM. A public
+    // "check your DMs" under a comment whose DM was refused (Instagram
+    // throttling, 2026-10-20) tells them something false, so it waits for the
+    // DM: right after it is sent, or on a later pass when it already was.
     // Idempotent across retries via publicReplySentAt.
     const replyPool =
       automation.publicReplyMessages.length > 0
@@ -499,6 +501,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         : automation.publicReplyMessage
           ? [automation.publicReplyMessage]
           : [];
+    const postPublicReply = async () => {
     if (
       automation.publicReplyEnabled &&
       replyPool.length > 0 &&
@@ -543,10 +546,14 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           .catch(() => {});
       }
     }
+    };
 
-    // DM already sent on an earlier pass; the public reply retry above was all
-    // this run needed. Don't re-send the DM.
-    if (!needsDm) continue;
+    // DM already sent on an earlier pass: only the public reply may still be
+    // owed. Don't re-send the DM.
+    if (!needsDm) {
+      await postPublicReply();
+      continue;
+    }
 
     // Meta allows exactly ONE private reply per comment, ever — across every
     // campaign. When several campaigns match the same comment (duplicated
@@ -574,6 +581,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           errorMessage: `Another campaign (${privateReplyUsedBy.automation?.name ?? "unknown"}) already sent the one private reply Instagram allows for this comment`,
         },
       });
+      // They have a DM for this comment, so the public reply is true.
+      await postPublicReply();
       continue;
     }
 
@@ -591,6 +600,7 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           errorMessage: "This person already got this campaign's DM for an earlier comment",
         },
       });
+      await postPublicReply();
       continue;
     }
 
@@ -951,6 +961,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       });
       throw sendError;
     }
+    // The DM is out: now the public reply is true. Its failure is logged on
+    // the DmLog and never fails the job.
+    await postPublicReply();
   }
 }
 

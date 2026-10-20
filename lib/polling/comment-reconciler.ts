@@ -298,8 +298,11 @@ async function sweepCampaign({
         log.dmDeliveryUnconfirmed || log.attempts >= MAX_COMMENT_SEND_ATTEMPTS ||
         hasScheduledRetry(log) ||
         (log.status === "FAILED" && hasLegacyUnconfirmedDelivery(log.errorMessage));
+      // The public reply only goes out with (after) a sent DM, so a comment
+      // without one owes no public reply on its own.
       const replyStopped = !automation.publicReplyEnabled ||
-        log.publicReplySentAt || log.publicReplyDeliveryUnconfirmed;
+        log.publicReplySentAt || log.publicReplyDeliveryUnconfirmed ||
+        log.status !== "SENT";
       return dmStopped && replyStopped;
     }).map((log) => log.commentId));
 
