@@ -30,6 +30,7 @@ const {
     dmLog: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
+      findMany: vi.fn(async (): Promise<unknown[]> => []),
       upsert: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
@@ -270,6 +271,7 @@ beforeEach(() => {
   mockPrisma.automation.findMany.mockResolvedValue([mockAutomation]);
   mockPrisma.automation.findFirst.mockResolvedValue(null);
   mockPrisma.dmLog.findUnique.mockResolvedValue(null);
+  mockPrisma.dmLog.findMany.mockResolvedValue([]);
   mockPrisma.dmLog.create.mockResolvedValue({});
   // Two different lookups share findFirst: the cross-campaign private-reply
   // check (keyed on status SENT) and the postback's name lookup. Only the
@@ -630,6 +632,28 @@ describe("DM Worker — Full Pipeline", () => {
       expect.objectContaining({ commentId: "comment_555" }),
       expect.objectContaining({ delay: 42_000 })
     );
+  });
+
+  it("DMs a person once per campaign, for their first comment", async () => {
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      { commentId: "comment_earlier", status: "SENT", createdAt: new Date(0) },
+    ]);
+
+    await getProcessor()(createMockJob());
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "SKIPPED_DEDUP" }) })
+    );
+  });
+
+  it("lets a later comment through when the earlier one failed for good", async () => {
+    // Only SENT and PENDING logs are asked for: a FAILED one is not returned.
+    mockPrisma.dmLog.findMany.mockResolvedValue([]);
+
+    await getProcessor()(createMockJob());
+
+    expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
   });
 
   it("should handle missing access token", async () => {

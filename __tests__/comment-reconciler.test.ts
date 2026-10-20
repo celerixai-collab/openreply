@@ -136,7 +136,7 @@ describe("comment polling does not recreate unsafe sends", () => {
     },
   );
 
-  it("retries a comment whose only owner reply is the campaign's own public reply", async () => {
+  it("still DMs comments the account replied to, by hand or by a public reply", async () => {
     readComments.mockResolvedValue([
       {
         id: "replied-by-campaign",
@@ -165,8 +165,10 @@ describe("comment polling does not recreate unsafe sends", () => {
       },
     ]);
     await reconcileComments();
-    expect(queueAdd).toHaveBeenCalledTimes(1);
-    expect(queueAdd.mock.calls[0][1].commentId).toBe("replied-by-campaign");
+    expect(queueAdd.mock.calls.map(([, data]) => data.commentId).sort()).toEqual([
+      "replied-by-campaign",
+      "replied-by-hand",
+    ]);
   });
 
   it("does not queue a comment whose retry is already scheduled", async () => {
@@ -184,5 +186,25 @@ describe("comment polling does not recreate unsafe sends", () => {
     await reconcileComments();
     expect(queueAdd).toHaveBeenCalledTimes(1);
     expect(queueAdd.mock.calls[0][1].commentId).toBe("new");
+  });
+
+  it("does not sweep a comment skipped because the person already got the DM", async () => {
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      { commentId: "old", status: "SKIPPED_DEDUP", attempts: 0, dmDeliveryUnconfirmed: false, updatedAt: new Date(), publicReplySentAt: null },
+    ]);
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        id: "campaign",
+        name: "Campaign",
+        workspaceId: "workspace",
+        postId: POST,
+        matchAnyWord: false,
+        keywords: ["AI"],
+        publicReplyEnabled: false,
+        instagramAccount: { id: "connection", instagramId: "owner", provider: "META", accessToken: "test" },
+      },
+    ]);
+    await reconcileComments();
+    expect(queueAdd.mock.calls.map(([, data]) => data.commentId)).toEqual(["new"]);
   });
 });

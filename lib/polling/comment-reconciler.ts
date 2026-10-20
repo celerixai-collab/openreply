@@ -244,9 +244,8 @@ async function sweepCampaign({
       ).map((log) => log.commentId)
     );
 
-    // Keep only comments that (a) aren't the account's own, (b) match the
-    // keyword, and (c) have no reply from the account owner yet, unless the
-    // campaign has already worked on them (then its DmLog decides below).
+    // Keep only comments that aren't the account's own and match the keyword;
+    // the campaign's DmLog decides below what is still to do.
     const needsAction = comments.filter((c) => {
       const authorId = c.from?.id;
       if (!authorId || authorId === account.instagramId) return false;
@@ -264,10 +263,11 @@ async function sweepCampaign({
       const ownerReplied = (c.replies?.data ?? []).some(
         (r) => r.from?.id === account.instagramId
       );
-      if (ownerReplied && !known.has(c.id)) {
-        stat.alreadyReplied += 1;
-        return false;
-      }
+      // Counted for the sweep report only: a reply from the account under
+      // the comment (by hand, or a campaign's public reply) is not a DM, so
+      // the comment still gets one. Each person gets it once per campaign
+      // (personAlreadyServed in the worker).
+      if (ownerReplied && !known.has(c.id)) stat.alreadyReplied += 1;
       return true;
     });
     if (needsAction.length === 0) continue;
@@ -290,7 +290,11 @@ async function sweepCampaign({
       },
     });
     const handledSet = new Set(logs.filter((log) => {
+      // SKIPPED_DEDUP: the person (or this comment, through another
+      // campaign) already got the DM; sweeping it again would only take a
+      // slot from someone still waiting.
       const dmStopped = log.status === "SENT" || log.status === "SKIPPED_PLAN_LIMIT" ||
+        log.status === "SKIPPED_DEDUP" ||
         log.dmDeliveryUnconfirmed || log.attempts >= MAX_COMMENT_SEND_ATTEMPTS ||
         hasScheduledRetry(log) ||
         (log.status === "FAILED" && hasLegacyUnconfirmedDelivery(log.errorMessage));
