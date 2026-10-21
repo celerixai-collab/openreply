@@ -275,6 +275,18 @@ function jitterMs(maxMs: number): number {
   return Math.floor(Math.random() * maxMs);
 }
 
+const TAKE_PACE_SLOT_SCRIPT = `
+local used = tonumber(redis.call("GET", KEYS[1]) or "0")
+if used >= tonumber(ARGV[1]) then
+  return 0
+end
+local next_used = redis.call("INCR", KEYS[1])
+if next_used == 1 then
+  redis.call("EXPIRE", KEYS[1], tonumber(ARGV[2]))
+end
+return 1
+`;
+
 export type PaceResult = { allowed: true } | { allowed: false; retryInMs: number };
 
 /**
@@ -290,19 +302,24 @@ export async function reservePaceSlot(instagramAccountId: string): Promise<PaceR
   }
   const now = Date.now();
   const minute = Math.floor(now / 60_000);
-  const key = `pace:dm:${instagramAccountId}:${minute}`;
-  const used = await client.incr(key);
-  if (used === 1) await client.expire(key, 120);
-  if (used > PACE_PER_MINUTE) {
-    const nextMinute = (minute + 1) * 60_000 - now;
-    // Spread the queue over the next few minutes, not all into the next one.
-    const backlogMinutes = Math.ceil((used - PACE_PER_MINUTE) / PACE_PER_MINUTE);
-    return {
-      allowed: false,
-      retryInMs: nextMinute + jitterMs(Math.max(1, backlogMinutes) * 60_000),
-    };
-  }
-  return { allowed: true };
+  const slotKey = `pace:dm:${instagramAccountId}:${minute}`;
+  const waitKey = `pace:wait:${instagramAccountId}:${minute}`;
+  // Only a granted slot counts against the minute: a refused job must not
+  // use up a slot it never got, or a long queue lets almost nothing through.
+  const granted = toScriptNumber(
+    await client.eval(TAKE_PACE_SLOT_SCRIPT, 1, slotKey, PACE_PER_MINUTE, 120)
+  );
+  if (granted === 1) return { allowed: true };
+  // How many jobs were turned away this minute spreads them over that many
+  // minutes ahead, so they do not all come back at once.
+  const waiting = await client.incr(waitKey);
+  if (waiting === 1) await client.expire(waitKey, 120);
+  const backlogMinutes = Math.ceil(waiting / PACE_PER_MINUTE);
+  const nextMinute = (minute + 1) * 60_000 - now;
+  return {
+    allowed: false,
+    retryInMs: nextMinute + jitterMs(Math.max(1, backlogMinutes) * 60_000),
+  };
 }
 
 /**
