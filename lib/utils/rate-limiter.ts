@@ -355,3 +355,37 @@ export function throttleRetryDelayMs(retry: number): number {
   const base = THROTTLE_RETRY_DELAYS_MS[Math.min(retry, THROTTLE_RETRY_DELAYS_MS.length - 1)];
   return base + jitterMs(5 * 60_000);
 }
+
+// ─── Public comment replies ─────────────────────────────────────────────────────
+//
+// Public replies hit Instagram's spam limit (368) on 2026-10-20 after a few
+// hundred in half an hour. They are paced on their own, slower than DMs, and
+// a 368 pauses them for a while; a reply held back now is posted on a later
+// sweep, since its DmLog still owes it.
+
+const PUBLIC_PACE_PER_MINUTE = Number(process.env.PUBLIC_REPLY_PACE_PER_MINUTE ?? 2);
+const PUBLIC_COOLDOWN_MS = Number(
+  process.env.PUBLIC_REPLY_COOLDOWN_MS ?? 30 * 60 * 1000
+);
+
+/** Take one public-reply slot for this minute, unless replies are paused. */
+export async function reservePublicReplySlot(instagramAccountId: string): Promise<boolean> {
+  const client = getRedis();
+  if ((await client.pttl(`cooldown:public:${instagramAccountId}`)) > 0) return false;
+  const minute = Math.floor(Date.now() / 60_000);
+  const granted = toScriptNumber(
+    await client.eval(
+      TAKE_PACE_SLOT_SCRIPT,
+      1,
+      `pace:public:${instagramAccountId}:${minute}`,
+      PUBLIC_PACE_PER_MINUTE,
+      120
+    )
+  );
+  return granted === 1;
+}
+
+/** Instagram refused a public reply for volume: pause them for a while. */
+export async function pausePublicReplies(instagramAccountId: string): Promise<void> {
+  await getRedis().set(`cooldown:public:${instagramAccountId}`, "1", "PX", PUBLIC_COOLDOWN_MS);
+}

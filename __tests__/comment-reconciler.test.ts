@@ -207,4 +207,20 @@ describe("comment polling does not recreate unsafe sends", () => {
     await reconcileComments();
     expect(queueAdd.mock.calls.map(([, data]) => data.commentId)).toEqual(["new"]);
   });
+
+  it("sweeps comments still owed a DM before ones owed only a public reply", async () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    readComments.mockResolvedValue([
+      { id: "dm-sent-older", text: "AI", from: { id: "a" }, timestamp: old },
+      { id: "needs-dm-newer", text: "AI", from: { id: "b" }, timestamp: new Date().toISOString() },
+    ]);
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      { commentId: "dm-sent-older", status: "SENT", attempts: 1, dmDeliveryUnconfirmed: false, updatedAt: new Date(), publicReplySentAt: null, publicReplyDeliveryUnconfirmed: false },
+    ]);
+    await reconcileComments();
+    expect(queueAdd.mock.calls.map(([, data]) => data.commentId)).toEqual([
+      "needs-dm-newer",
+      "dm-sent-older",
+    ]);
+  });
 });

@@ -128,6 +128,8 @@ vi.mock("@/lib/utils/rate-limiter", () => ({
   reservePaceSlot: (...args: unknown[]) => mockReservePaceSlot(...(args as [])),
   recordThrottle: (...args: unknown[]) => mockRecordThrottle(...(args as [])),
   MAX_THROTTLE_RETRIES: 8,
+  reservePublicReplySlot: async () => true,
+  pausePublicReplies: async () => undefined,
   throttleRetryDelayMs: (retry: number) => (retry + 1) * 15 * 60_000,
 }));
 

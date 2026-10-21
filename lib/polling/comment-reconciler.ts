@@ -306,10 +306,19 @@ async function sweepCampaign({
       return dmStopped && replyStopped;
     }).map((log) => log.commentId));
 
-    // Oldest first, so whoever commented earliest gets answered first, capped.
+    // Comments that still need their DM come first, oldest first; a comment
+    // that only owes its public reply waits behind them, so a backlog of
+    // public replies never takes the sweep's slots from someone without a DM.
+    const dmSent = new Set(
+      logs.filter((log) => log.status === "SENT").map((log) => log.commentId)
+    );
     const fresh = needsAction
       .filter((c) => !handledSet.has(c.id))
-      .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+      .sort(
+        (a, b) =>
+          Number(dmSent.has(a.id)) - Number(dmSent.has(b.id)) ||
+          Date.parse(a.timestamp) - Date.parse(b.timestamp)
+      )
       .slice(0, MAX_NEW_PER_SWEEP);
 
     for (const c of fresh) {

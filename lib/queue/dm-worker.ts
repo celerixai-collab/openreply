@@ -46,7 +46,9 @@ import {
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 import {
   MAX_THROTTLE_RETRIES,
+  pausePublicReplies,
   recordThrottle,
+  reservePublicReplySlot,
   releaseDMSlot,
   reserveDMSlot,
   reservePaceSlot,
@@ -507,6 +509,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       replyPool.length > 0 &&
       !existingLog?.publicReplySentAt &&
       !existingLog?.publicReplyDeliveryUnconfirmed &&
+      // Paced, and paused after a spam-limit refusal; one held back here is
+      // posted on a later sweep.
+      (await reservePublicReplySlot(instagramAccountId).catch(() => true)) &&
       await claimCommentDelivery(automation.id, commentId, "public")
     ) {
       try {
@@ -533,6 +538,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           "[DM Worker] Public comment reply failed:",
           formatError(error)
         );
+        if (isInstagramThrottle(error)) {
+          await pausePublicReplies(instagramAccountId).catch(() => undefined);
+        }
         await prisma.dmLog
           .update({
             where: {
