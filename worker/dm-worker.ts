@@ -5,7 +5,11 @@ import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
-import { requeuePersonDedupSkips, requeueThrottledComments } from "@/lib/queue/requeue-throttled";
+import {
+  markRefusedRepeatsDelivered,
+  requeuePersonDedupSkips,
+  requeueThrottledComments,
+} from "@/lib/queue/requeue-throttled";
 import os from "node:os";
 
 const worker = createDMWorker();
@@ -22,6 +26,12 @@ const POLL_INTERVAL_MS = Number(
 
 console.log("[DM Worker] Started");
 
+void markRefusedRepeatsDelivered().catch((error) =>
+  console.error(
+    "[DM Worker] Marking refused repeats failed:",
+    error instanceof Error ? error.message : error
+  )
+);
 void requeuePersonDedupSkips().catch((error) =>
   console.error(
     "[DM Worker] Re-queueing repeat comments failed:",

@@ -57,3 +57,32 @@ export async function requeuePersonDedupSkips(): Promise<number> {
   console.log(`[DM Worker] Re-queued ${count} comments skipped as repeat comments`);
   return count;
 }
+
+/**
+ * One-time fix (2026-10-21): six private replies in the two campaigns were
+ * cut off mid-send by redeploys and, when retried, Instagram answered
+ * "unknown error", as it does for a second private reply to the same
+ * comment. They are taken as delivered, so each comment also gets its public
+ * reply.
+ */
+export async function markRefusedRepeatsDelivered(): Promise<number> {
+  if (!(await claimOnce("mark-refused-repeats-2026-10-21"))) return 0;
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      automationId: { in: CAMPAIGN_IDS },
+      status: "FAILED",
+      dmDeliveryUnconfirmed: true,
+      attempts: { gte: 2 },
+      NOT: { commentId: { startsWith: "reveal:" } },
+    },
+    data: {
+      status: "SENT",
+      dmDeliveryUnconfirmed: false,
+      errorMessage:
+        "Taken as delivered: a retry was refused as Instagram does for a second private reply",
+    },
+  });
+  console.log(`[DM Worker] Marked ${count} refused repeat private replies as delivered`);
+  return count;
+}
+
