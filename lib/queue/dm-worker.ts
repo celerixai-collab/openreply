@@ -504,16 +504,29 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           ? [automation.publicReplyMessage]
           : [];
     const postPublicReply = async () => {
-    if (
+    const owed =
       automation.publicReplyEnabled &&
       replyPool.length > 0 &&
       !existingLog?.publicReplySentAt &&
-      !existingLog?.publicReplyDeliveryUnconfirmed &&
-      // Paced, and paused after a spam-limit refusal; one held back here is
-      // posted on a later sweep.
-      (await reservePublicReplySlot(instagramAccountId).catch(() => true)) &&
-      await claimCommentDelivery(automation.id, commentId, "public")
-    ) {
+      !existingLog?.publicReplyDeliveryUnconfirmed;
+    if (!owed) return;
+    // Paced, and paused after a spam-limit refusal. One held back is queued
+    // again a few minutes out, so the sweep's batch spreads over the minutes
+    // instead of only the first few of each sweep getting through.
+    if (!(await reservePublicReplySlot(instagramAccountId).catch(() => true))) {
+      await getDMQueue()
+        .add("process-comment", job.data, {
+          delay: 30_000 + Math.floor(Math.random() * 4 * 60_000),
+          // One waiting retry per comment at most: a second add with this id
+          // is ignored, and the id is freed once the job finishes.
+          jobId: `comment_${instagramAccountId}_${commentId}_pub`,
+          removeOnComplete: true,
+          removeOnFail: true,
+        })
+        .catch(() => undefined);
+      return;
+    }
+    if (await claimCommentDelivery(automation.id, commentId, "public")) {
       try {
         const chosen = replyPool[Math.floor(Math.random() * replyPool.length)];
         const publicReply = renderMessageWithTracking({
