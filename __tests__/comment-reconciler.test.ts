@@ -11,7 +11,7 @@ const { mockPrisma, queueAdd, readComments } = vi.hoisted(() => ({
   mockPrisma: {
     $queryRaw: vi.fn(),
     automation: { findMany: vi.fn() },
-    dmLog: { findMany: vi.fn() },
+    dmLog: { findMany: vi.fn(), updateMany: vi.fn(async () => ({ count: 0 })) },
     operationalEvent: { create: vi.fn() },
   },
   queueAdd: vi.fn(),
@@ -222,5 +222,31 @@ describe("comment polling does not recreate unsafe sends", () => {
       "needs-dm-newer",
       "dm-sent-older",
     ]);
+  });
+
+  it("sweeps replies under a comment too", async () => {
+    readComments.mockResolvedValue([
+      {
+        id: "top",
+        text: "AI",
+        from: { id: "reader" },
+        timestamp: new Date().toISOString(),
+        replies: { data: [{ id: "reply", text: "AI too", from: { id: "replier" }, timestamp: new Date().toISOString() }] },
+      },
+    ]);
+    mockPrisma.dmLog.findMany.mockResolvedValue([]);
+    await reconcileComments();
+    expect(queueAdd.mock.calls.map(([, data]) => data.commentId).sort()).toEqual(["reply", "top"]);
+  });
+
+  it("frees a private reply left unconfirmed for a while, so it is tried again", async () => {
+    mockPrisma.dmLog.findMany.mockResolvedValue([]);
+    await reconcileComments();
+    expect(mockPrisma.dmLog.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ dmDeliveryUnconfirmed: true, updatedAt: { lt: expect.any(Date) } }),
+        data: { dmDeliveryUnconfirmed: false },
+      })
+    );
   });
 });

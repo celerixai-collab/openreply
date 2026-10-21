@@ -41,6 +41,26 @@ import {
 } from "@/lib/instagram/provider";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 
+function withThreadReplies(comments: InstagramComment[], sinceMs: number): InstagramComment[] {
+  const out = [...comments];
+  const seen = new Set(comments.map((c) => c.id));
+  for (const comment of comments) {
+    for (const reply of comment.replies?.data ?? []) {
+      if (seen.has(reply.id) || !reply.timestamp) continue;
+      if (Date.parse(reply.timestamp) < sinceMs) continue;
+      seen.add(reply.id);
+      out.push({ id: reply.id, text: reply.text ?? "", from: reply.from, timestamp: reply.timestamp });
+    }
+  }
+  return out;
+}
+
+// A private reply whose delivery was left unconfirmed (the worker stopped
+// mid-send, e.g. during a redeploy) is safe to try again after a while:
+// Instagram allows one private reply per comment, so a repeat either
+// delivers the one that was lost or is refused.
+const UNCONFIRMED_RETRY_AFTER_MS = 30 * 60 * 1000;
+
 // A comment the worker already re-queued with a delay (paced, throttled or
 // over the hourly cap) has a job waiting; queueing another would only pile
 // up copies. Trusted for a little over the longest delay, in case that job
@@ -232,6 +252,10 @@ async function sweepCampaign({
       continue;
     }
 
+    // Replies under a comment are comments too: someone answering another
+    // commenter with the keyword is owed the DM like everyone else.
+    comments = withThreadReplies(comments, sinceMs);
+
     // Comments this campaign has already worked on. For these, a reply from
     // the account under the comment is usually the campaign's own public
     // reply, which says nothing about whether the DM went out.
@@ -278,6 +302,16 @@ async function sweepCampaign({
     // enough — the reply still has to land); otherwise a SENT DM is enough. This
     // is what lets a comment whose DM sent but whose public reply failed come
     // back and retry the reply.
+    await prisma.dmLog.updateMany({
+      where: {
+        automationId: automation.id,
+        commentId: { in: needsAction.map((c) => c.id) },
+        status: { in: ["PENDING", "FAILED"] },
+        dmDeliveryUnconfirmed: true,
+        updatedAt: { lt: new Date(Date.now() - UNCONFIRMED_RETRY_AFTER_MS) },
+      },
+      data: { dmDeliveryUnconfirmed: false },
+    });
     const logs = await prisma.dmLog.findMany({
       where: {
         automationId: automation.id,
