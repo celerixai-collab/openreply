@@ -9,6 +9,7 @@ import {
   markRefusedRepeatsDelivered,
   requeuePersonDedupSkips,
   requeueThrottledComments,
+  requeueThrottledEverywhere,
 } from "@/lib/queue/requeue-throttled";
 import os from "node:os";
 
@@ -26,6 +27,12 @@ const POLL_INTERVAL_MS = Number(
 
 console.log("[DM Worker] Started");
 
+void requeueThrottledEverywhere().catch((error) =>
+  console.error(
+    "[DM Worker] Re-queueing throttled comments failed:",
+    error instanceof Error ? error.message : error
+  )
+);
 void markRefusedRepeatsDelivered().catch((error) =>
   console.error(
     "[DM Worker] Marking refused repeats failed:",

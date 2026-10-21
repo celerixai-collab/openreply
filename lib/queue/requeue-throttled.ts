@@ -86,3 +86,30 @@ export async function markRefusedRepeatsDelivered(): Promise<number> {
   return count;
 }
 
+/**
+ * One-time rescue (2026-10-21) for every other campaign: comments from the
+ * night of 2026-10-20 whose private reply Instagram throttled and the old
+ * worker gave up on. They go back to the reconciler, which sends them at
+ * the paced rate. Accounts that "cannot be found" are left out: nothing can
+ * reach them.
+ */
+export async function requeueThrottledEverywhere(): Promise<number> {
+  if (!(await claimOnce("requeue-throttled-all-2026-10-21"))) return 0;
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      status: "FAILED",
+      NOT: { commentId: { startsWith: "reveal:" } },
+      errorMessage: { contains: "thread does not exist" },
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      dmDeliveryUnconfirmed: false,
+      errorMessage: "Re-queued after Instagram throttling on 2026-10-20",
+    },
+  });
+  console.log(`[DM Worker] Re-queued ${count} throttled comments in other campaigns`);
+  return count;
+}
+
