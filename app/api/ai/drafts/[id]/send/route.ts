@@ -24,11 +24,14 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
   }
 
   const { id } = await params;
-  const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as
+    | { text?: unknown; withLink?: unknown }
+    | null;
   const result = await requestDraftSend({
     workspaceId: context.workspaceId,
     draftId: id,
     text: body?.text,
+    withLink: body?.withLink !== false,
   });
   if (!result.ok) {
     return NextResponse.json(

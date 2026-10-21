@@ -27,6 +27,7 @@ import {
 } from "./constants";
 import { truncateToUtf8Bytes, utf8ByteLength } from "@/lib/contacts/email-copy";
 import type { AnthropicMessagesClient } from "./client";
+import { BRAIN_LIMITS } from "./brain";
 
 export const DRAFT_MAX_TOKENS = 8000;
 export const DRAFT_EFFORT = "high" as const;
@@ -43,6 +44,10 @@ export const DRAFT_REPLY_SCHEMA = {
     handoff_reason: { anyOf: [{ type: "string" }, { type: "null" }] },
     language: { type: "string" },
     confidence: { type: "string", enum: [...AI_CONFIDENCE] },
+    send_link_id: { anyOf: [{ type: "string" }, { type: "null" }] },
+    knowledge_gap: { type: "boolean" },
+    gap_question: { anyOf: [{ type: "string" }, { type: "null" }] },
+    used_topics: { type: "array", items: { type: "string" } },
   },
   required: [
     "reply_text",
@@ -51,6 +56,10 @@ export const DRAFT_REPLY_SCHEMA = {
     "handoff_reason",
     "language",
     "confidence",
+    "send_link_id",
+    "knowledge_gap",
+    "gap_question",
+    "used_topics",
   ],
   additionalProperties: false,
 } as const;
@@ -63,6 +72,10 @@ const DraftReply = z
     handoff_reason: z.string().nullable(),
     language: z.string(),
     confidence: z.enum(AI_CONFIDENCE),
+    send_link_id: z.string().nullable(),
+    knowledge_gap: z.boolean(),
+    gap_question: z.string().nullable(),
+    used_topics: z.array(z.string()),
   })
   .strict();
 
@@ -73,6 +86,12 @@ export type GeneratedDraft = {
   handoffReason: string | null;
   language: string;
   confidence: AiConfidence;
+  // The AiLink to send as a button with the reply, if any.
+  linkId: string | null;
+  knowledgeGap: boolean;
+  gapQuestion: string | null;
+  // Titles of the knowledge entries the reply relied on.
+  usedTopics: string[];
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -182,6 +201,10 @@ export async function generateDraftReply({
     handoffReason: parsed.handoff_reason?.trim() || null,
     language: parsed.language.trim(),
     confidence: parsed.confidence,
+    linkId: parsed.send_link_id?.trim() || null,
+    knowledgeGap: parsed.knowledge_gap,
+    gapQuestion: parsed.knowledge_gap ? parsed.gap_question?.trim() || null : null,
+    usedTopics: parsed.used_topics.map((topic) => topic.trim()).filter(Boolean).slice(0, 10),
     usage: {
       inputTokens:
         usage.input_tokens + cacheRead + (usage.cache_creation_input_tokens ?? 0),
@@ -219,23 +242,47 @@ export function finalizeDraft(
     disclosureText,
     firstReply,
     knowledge = "",
-  }: { disclosureText: string; firstReply: boolean; knowledge?: string }
+    linkIds = [],
+  }: {
+    disclosureText: string;
+    firstReply: boolean;
+    // Every URL the reply may contain (knowledge plus the links' URLs).
+    knowledge?: string;
+    // The ids of the links the assistant may send.
+    linkIds?: string[];
+  }
 ): GeneratedDraft {
   const strayLinks = unknownLinks(draft.replyText, knowledge);
+  // A link id the model made up is dropped, and the draft goes to a person.
+  const badLinkId = Boolean(draft.linkId) && !linkIds.includes(draft.linkId!);
+  const linkId = badLinkId ? null : draft.linkId;
   const needsHuman =
     draft.needsHuman ||
     HANDOFF_INTENTS.includes(draft.intent) ||
     draft.confidence === "low" ||
-    strayLinks.length > 0;
+    draft.knowledgeGap ||
+    strayLinks.length > 0 ||
+    badLinkId;
   const reserved = utf8ByteLength(composeOutgoingText("", disclosureText, firstReply));
   const budget = Math.max(0, MAX_DM_TEXT_BYTES - reserved);
+  let replyText = truncateToUtf8Bytes(draft.replyText, budget).trim();
+  // With a button, Instagram allows 640 characters of text above it.
+  if (linkId) {
+    const room = BRAIN_LIMITS.buttonText - [...composeOutgoingText("", disclosureText, firstReply)].length;
+    replyText = [...replyText].slice(0, Math.max(0, room)).join("").trim();
+  }
   return {
     ...draft,
-    replyText: truncateToUtf8Bytes(draft.replyText, budget).trim(),
+    replyText,
+    linkId,
     needsHuman,
     handoffReason: needsHuman
       ? (draft.handoffReason ??
-        (strayLinks.length ? "回覆裡有大腦資料以外的連結，請確認" : null))
+        (strayLinks.length || badLinkId
+          ? "回覆裡有大腦資料以外的連結，請確認"
+          : draft.knowledgeGap
+            ? "知識庫沒有這個問題的答案"
+            : null))
       : null,
   };
 }

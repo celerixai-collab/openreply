@@ -58,6 +58,9 @@ export async function GET(request: NextRequest) {
         createdAt: true,
         decidedAt: true,
         sentAt: true,
+        actionLinkId: true,
+        knowledgeGap: true,
+        gapQuestion: true,
         contact: { select: { name: true, username: true } },
         instagramAccount: {
           select: { username: true, aiAssistant: { select: { disclosureText: true } } },
@@ -71,10 +74,18 @@ export async function GET(request: NextRequest) {
     instagramAccountId: row.instagramAccountId,
     igsid: row.igsid,
   }));
-  const [latest, replied] = await Promise.all([
+  const linkIds = [...new Set(rows.map((row) => row.actionLinkId).filter(Boolean))] as string[];
+  const [latest, replied, linkRows] = await Promise.all([
     latestInboundByPerson(people),
     peopleWithSentReply(people),
+    linkIds.length
+      ? prisma.aiLink.findMany({
+          where: { id: { in: linkIds }, workspaceId: context.workspaceId },
+          select: { id: true, label: true, url: true },
+        })
+      : Promise.resolve([]),
   ]);
+  const linkById = new Map(linkRows.map((link) => [link.id, link]));
 
   const drafts = rows.map(({ igsid, instagramAccount, contact, ...row }) => {
     const key = personKey({ instagramAccountId: row.instagramAccountId, igsid });
@@ -87,6 +98,7 @@ export async function GET(request: NextRequest) {
       disclosureText: instagramAccount.aiAssistant?.disclosureText ?? "",
       firstReply: !replied.has(key),
       windowEndsAt: replyWindowEndsAt(latestInbound).toISOString(),
+      link: row.actionLinkId ? (linkById.get(row.actionLinkId) ?? null) : null,
     };
   });
 

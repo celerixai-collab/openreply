@@ -11,6 +11,7 @@ export const AI_QUEUE_NAME = "ai-drafts";
 export const AI_DRAFT_JOB_NAME = "ai-draft";
 export const SEND_AI_DRAFT_JOB_NAME = "send-ai-draft";
 export const AI_ECHO_JOB_NAME = "ai-echo";
+export const AI_PLAYGROUND_JOB_NAME = "ai-playground";
 
 // An echo is checked this long after it arrives, so the record of a message
 // OpenReply sent (written right after the send returns) is in place first.
@@ -55,7 +56,15 @@ export interface AiEchoJob {
   messageText: string;
 }
 
-export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob;
+/** Try the assistant on a made-up conversation (nothing is sent). */
+export interface AiPlaygroundJob {
+  playgroundId: string;
+  // Internal InstagramAccount.id.
+  accountId: string;
+  turns: { from: "person" | "creator"; text: string }[];
+}
+
+export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob | AiPlaygroundJob;
 
 export function aiEchoJobId(instagramAccountId: string, messageId: string): string {
   return `ai-echo_${instagramAccountId}_${Buffer.from(messageId).toString("base64url")}`;

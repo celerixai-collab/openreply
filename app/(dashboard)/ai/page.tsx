@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { StaticMessageKey } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/provider";
 import AccountSelect, { type AccountOption } from "@/components/account-select";
+import { BrainTab, GapsTab, PlaygroundTab } from "./brain-tabs";
 import {
   AI_MODEL_LABEL,
   AI_SETTINGS_LIMITS,
@@ -19,8 +20,17 @@ import {
   composeOutgoingText,
   utf8ByteLength,
 } from "@/lib/ai/constants";
+import { BRAIN_LIMITS } from "@/lib/ai/brain";
 
-type Tab = "drafts" | "settings";
+type Tab = "drafts" | "brain" | "playground" | "gaps" | "settings";
+
+const TAB_LABELS: Record<Tab, StaticMessageKey> = {
+  drafts: "Drafts",
+  brain: "Second brain",
+  playground: "Playground",
+  gaps: "Unanswered",
+  settings: "Settings",
+};
 
 interface AccountRow {
   id: string;
@@ -106,6 +116,9 @@ interface Draft {
   disclosureText: string;
   firstReply: boolean;
   windowEndsAt: string;
+  link: { id: string; label: string; url: string } | null;
+  knowledgeGap: boolean;
+  gapQuestion: string | null;
 }
 
 interface Pagination {
@@ -180,7 +193,7 @@ export default function AiAssistantPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex gap-1 rounded-lg border border-border p-1 w-fit" role="tablist">
-          {(["drafts", "settings"] as const).map((value) => (
+          {(["drafts", "brain", "playground", "gaps", "settings"] as const).map((value) => (
             <button
               key={value}
               type="button"
@@ -193,7 +206,7 @@ export default function AiAssistantPage() {
                   : "text-muted hover:text-foreground"
               }`}
             >
-              {value === "drafts" ? t("Drafts") : t("Settings")}
+              {t(TAB_LABELS[value])}
             </button>
           ))}
         </div>
@@ -222,6 +235,12 @@ export default function AiAssistantPage() {
         </div>
       ) : tab === "drafts" ? (
         <DraftsTab accountId={accountId} />
+      ) : tab === "brain" ? (
+        <BrainTab key={accountId ?? "none"} accountId={accountId} />
+      ) : tab === "playground" ? (
+        <PlaygroundTab key={accountId ?? "none"} accountId={accountId} />
+      ) : tab === "gaps" ? (
+        <GapsTab key={accountId ?? "none"} accountId={accountId} />
       ) : (
         <SettingsTab
           key={accountId ?? "none"}
@@ -428,13 +447,15 @@ function DraftCard({
   const [text, setText] = useState(draft.draftText);
   const [busy, setBusy] = useState<"send" | "dismiss" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [withLink, setWithLink] = useState(Boolean(draft.link));
 
   const actionable = draft.status === "PENDING" || draft.status === "FAILED";
   const msLeft = new Date(draft.windowEndsAt).getTime() - now;
   const windowOpen = msLeft > 0;
   const outgoing = composeOutgoingText(text, draft.disclosureText, draft.firstReply);
   const bytes = utf8ByteLength(outgoing);
-  const tooLong = bytes > MAX_DM_TEXT_BYTES;
+  const tooLong =
+    bytes > MAX_DM_TEXT_BYTES || (withLink && [...outgoing].length > BRAIN_LIMITS.buttonText);
 
   // The burst being answered is the end of the snapshot; show a few turns
   // before it for context.
@@ -449,7 +470,7 @@ function DraftCard({
       const res = await fetch(`/api/ai/drafts/${draft.id}/${kind}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: kind === "send" ? JSON.stringify({ text }) : "{}",
+        body: kind === "send" ? JSON.stringify({ text, withLink }) : "{}",
       });
       const data = await res.json();
       if (!data.success) {
@@ -567,6 +588,26 @@ function DraftCard({
             disabled={!canManage}
             className={`${inputClass} resize-y`}
           />
+          {draft.link && (
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={withLink}
+                disabled={!canManage}
+                onChange={(event) => setWithLink(event.target.checked)}
+              />
+              <span>
+                {t("Send with link button")}{" "}
+                <span className="text-foreground">「{draft.link.label}」</span>{" "}
+                <span className="break-all">{draft.link.url}</span>
+              </span>
+            </label>
+          )}
+          {draft.knowledgeGap && (
+            <p className="rounded border border-warning/20 bg-warning/10 p-2 text-xs text-warning">
+              {t("Not in your second brain:")} {draft.gapQuestion ?? draft.inboundText}
+            </p>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className={`text-xs ${tooLong ? "text-error" : "text-muted"}`}>
               {t("{bytes} / {max} bytes", { bytes, max: MAX_DM_TEXT_BYTES })}

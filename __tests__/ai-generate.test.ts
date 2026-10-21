@@ -14,6 +14,7 @@ import {
   buildUserMessage,
   describeCampaigns,
 } from "../lib/ai/prompt";
+import { compileKnowledge } from "../lib/ai/brain";
 import { utf8ByteLength } from "../lib/contacts/email-copy";
 
 const reply = {
@@ -23,6 +24,10 @@ const reply = {
   handoff_reason: null,
   language: "zh-TW",
   confidence: "high",
+  send_link_id: null,
+  knowledge_gap: false,
+  gap_question: null,
+  used_topics: ["課程"],
 };
 
 function message(overrides: Partial<Anthropic.Message> = {}): Anthropic.Message {
@@ -159,6 +164,10 @@ describe("finalizeDraft", () => {
     handoffReason: null,
     language: "zh-TW",
     confidence: "high",
+    linkId: null,
+    knowledgeGap: false,
+    gapQuestion: null,
+    usedTopics: [],
     usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 },
   };
   const disclosure = "（我是 AI 小助理，訊息經過本人確認後送出）";
@@ -245,3 +254,60 @@ describe("prompt", () => {
     expect(text).toContain("[2026-10-09 10:00 UTC creator] 嗨");
   });
 });
+
+describe("links and gaps", () => {
+  const base: GeneratedDraft = {
+    replyText: "連結在下面 👇",
+    intent: "link_request",
+    needsHuman: false,
+    handoffReason: null,
+    language: "zh-TW",
+    confidence: "high",
+    linkId: "link_1",
+    knowledgeGap: false,
+    gapQuestion: null,
+    usedTopics: [],
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 },
+  };
+
+  it("keeps a link the assistant may send", () => {
+    const draft = finalizeDraft(base, { disclosureText: "", firstReply: false, linkIds: ["link_1"] });
+    expect(draft).toMatchObject({ linkId: "link_1", needsHuman: false });
+  });
+
+  it("drops a made-up link id and hands the draft to the creator", () => {
+    const draft = finalizeDraft({ ...base, linkId: "invented" }, { disclosureText: "", firstReply: false, linkIds: ["link_1"] });
+    expect(draft.linkId).toBeNull();
+    expect(draft.needsHuman).toBe(true);
+    expect(draft.handoffReason).toContain("連結");
+  });
+
+  it("keeps the text above a button within Instagram's 640 characters", () => {
+    const draft = finalizeDraft(
+      { ...base, replyText: "好".repeat(700) },
+      { disclosureText: "（AI）", firstReply: true, linkIds: ["link_1"] }
+    );
+    expect([...`（AI）\n${draft.replyText}`].length).toBeLessThanOrEqual(640);
+  });
+
+  it("sends a question the knowledge cannot answer to the creator", () => {
+    const draft = finalizeDraft(
+      { ...base, linkId: null, knowledgeGap: true, gapQuestion: "有沒有英文版？" },
+      { disclosureText: "", firstReply: false }
+    );
+    expect(draft).toMatchObject({ needsHuman: true, gapQuestion: "有沒有英文版？" });
+    expect(draft.handoffReason).toBeTruthy();
+  });
+
+  it("puts knowledge entries and links into the cached system prompt", () => {
+    const blocks = buildSystemBlocks(
+      { role: "", voice: "", guardrails: "", goals: "", knowledge: compileKnowledge([{ title: "價格", content: "10/28 公布" }], "") },
+      [],
+      [{ id: "link_1", label: "加入名單", url: "https://example.com/w", description: "想加入候補名單時" }]
+    );
+    expect(blocks[1].text).toContain("【價格】\n10/28 公布");
+    expect(blocks[1].text).toContain("id: link_1 | button: 「加入名單」 | send it when: 想加入候補名單時");
+    expect(blocks[0].text).toContain("send_link_id");
+  });
+});
+

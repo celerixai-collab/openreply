@@ -137,7 +137,7 @@ describe("send and dismiss", () => {
     as("ADMIN");
     const ok = await SEND(req("/api/ai/drafts/draft_1/send", "POST", { text: "hi" }), params);
     expect(ok.status).toBe(202);
-    expect(mockSend).toHaveBeenCalledWith({ workspaceId: "ws_1", draftId: "draft_1", text: "hi" });
+    expect(mockSend).toHaveBeenCalledWith({ workspaceId: "ws_1", draftId: "draft_1", text: "hi", withLink: true });
 
     mockSend.mockResolvedValue({ ok: false, httpStatus: 410, code: "window_closed", error: "closed" });
     const closed = await SEND(req("/api/ai/drafts/draft_1/send", "POST", { text: "hi" }), params);

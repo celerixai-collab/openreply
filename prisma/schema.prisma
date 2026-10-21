@@ -18,11 +18,11 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts          Account[]
-  sessions          Session[]
-  ownedWorkspaces   Workspace[]       @relation("WorkspaceOwner")
-  workspaceMembers  WorkspaceMember[]
-  sentInvitations   WorkspaceInvitation[] @relation("WorkspaceInvitationsSent")
+  accounts         Account[]
+  sessions         Session[]
+  ownedWorkspaces  Workspace[]           @relation("WorkspaceOwner")
+  workspaceMembers WorkspaceMember[]
+  sentInvitations  WorkspaceInvitation[] @relation("WorkspaceInvitationsSent")
 }
 
 model Account {
@@ -88,6 +88,8 @@ model Workspace {
   contacts          Contact[]
   aiAssistants      AiAssistant[]
   aiDrafts          AiDraft[]
+  aiKnowledge       AiKnowledgeEntry[]
+  aiLinks           AiLink[]
 
   @@index([ownerId])
 }
@@ -129,27 +131,29 @@ model WorkspaceInvitation {
 }
 
 model InstagramAccount {
-  id                String   @id @default(cuid())
+  id                String            @id @default(cuid())
   workspaceId       String
-  instagramId       String   @unique
+  instagramId       String            @unique
   username          String
   name              String?
   provider          InstagramProvider @default(META)
   zernioAccountId   String?
   accessToken       String
   tokenExpiresAt    DateTime?
-  webhookSubscribed Boolean  @default(false)
-  connectedAt       DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  webhookSubscribed Boolean           @default(false)
+  connectedAt       DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  automations Automation[]
-  dmLogs      DmLog[]
-  linkClicks  LinkClick[]
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  automations       Automation[]
+  dmLogs            DmLog[]
+  linkClicks        LinkClick[]
   followerSnapshots FollowerSnapshot[]
-  contacts    Contact[]
-  aiAssistant AiAssistant?
-  aiDrafts    AiDraft[]
+  contacts          Contact[]
+  aiAssistant       AiAssistant?
+  aiDrafts          AiDraft[]
+  aiKnowledge       AiKnowledgeEntry[]
+  aiLinks           AiLink[]
 
   @@index([workspaceId])
 }
@@ -175,51 +179,51 @@ model FollowerSnapshot {
 }
 
 model Automation {
-  id                 String   @id @default(cuid())
+  id                 String @id @default(cuid())
   workspaceId        String
   instagramAccountId String
 
-  name           String
-  goal           String?
-  postId         String?
-  postUrl        String?
-  pendingNextReel Boolean @default(false)
-  matchAnyPost   Boolean @default(false)
-  keywords       String[]
-  matchAnyWord   Boolean @default(false)
+  name                    String
+  goal                    String?
+  postId                  String?
+  postUrl                 String?
+  pendingNextReel         Boolean  @default(false)
+  matchAnyPost            Boolean  @default(false)
+  keywords                String[]
+  matchAnyWord            Boolean  @default(false)
   // Also fire this campaign when someone sends a DM whose text matches the
   // keywords above. Independent of the post trigger — a DM has no media, so
   // postId / matchAnyPost do not apply to it.
-  dmTriggerEnabled Boolean @default(false)
-  dmMessage      String
-  openingDmEnabled     Boolean @default(false)
-  openingDmMessage     String?
-  openingDmButtonLabel String?
-  linkButtonLabel      String?
-  requireFollow           Boolean @default(false)
+  dmTriggerEnabled        Boolean  @default(false)
+  dmMessage               String
+  openingDmEnabled        Boolean  @default(false)
+  openingDmMessage        String?
+  openingDmButtonLabel    String?
+  linkButtonLabel         String?
+  requireFollow           Boolean  @default(false)
   followPromptMessage     String?
   followPromptButtonLabel String?
   // Email gate: the link is delivered only to someone who has left an email.
   // Empty messages fall back to the defaults in lib/contacts/email-copy.ts.
-  collectEmail           Boolean @default(false)
-  emailPromptMessage     String?
-  emailInvalidMessage    String?
-  emailThanksMessage     String?
+  collectEmail            Boolean  @default(false)
+  emailPromptMessage      String?
+  emailInvalidMessage     String?
+  emailThanksMessage      String?
   // Offer Instagram's one-tap `user_email` quick reply with the ask. Meta
   // hides it on desktop and when the profile has no email.
-  emailQuickReplyEnabled Boolean @default(true)
-  followUpEnabled Boolean @default(false)
-  followUpMessage String?
+  emailQuickReplyEnabled  Boolean  @default(true)
+  followUpEnabled         Boolean  @default(false)
+  followUpMessage         String?
   // Minutes to wait after the link is delivered before sending the follow-up.
   // 0 sends it right away.
-  followUpDelayMinutes Int @default(0)
-  publicReplyEnabled Boolean @default(false)
-  publicReplyMessage String?
-  publicReplyMessages String[] @default([])
-  isActive       Boolean @default(true)
-  wholeWordMatch Boolean @default(true)
-  reportShareSlug    String? @unique
-  reportShareEnabled Boolean @default(true)
+  followUpDelayMinutes    Int      @default(0)
+  publicReplyEnabled      Boolean  @default(false)
+  publicReplyMessage      String?
+  publicReplyMessages     String[] @default([])
+  isActive                Boolean  @default(true)
+  wholeWordMatch          Boolean  @default(true)
+  reportShareSlug         String?  @unique
+  reportShareEnabled      Boolean  @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -240,7 +244,7 @@ model Automation {
 /// account, plus the email-gate state for them. Only people a campaign
 /// actually matched are recorded, not every commenter on the account.
 model Contact {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   workspaceId        String
   /// Internal InstagramAccount.id, not the Instagram professional account id.
   instagramAccountId String
@@ -263,14 +267,14 @@ model Contact {
   lastTriggerKeyword String?
   lastTriggerAt      DateTime?
 
-  email             String?
-  emailCapturedAt   DateTime?
+  email              String?
+  emailCapturedAt    DateTime?
   /// The campaign whose email gate captured the email.
-  emailAutomationId String?
+  emailAutomationId  String?
   /// "typed" or "quick_reply" (Instagram's one-tap email button).
-  emailSource       String?
+  emailSource        String?
   /// Snapshot of the exact ask message that was sent: the consent record.
-  emailConsentText  String?
+  emailConsentText   String?
   /// Snapshot of the trigger (comment or DM) that led to the email, copied
   /// from lastTrigger* when the email is stored.
   emailSourceType    String?
@@ -346,6 +350,46 @@ model AiAssistant {
 /// One AI-written reply waiting for (or past) a decision. Emails in the
 /// inbound text and the history are masked before anything is stored or sent
 /// to the model.
+/// One topic of an assistant's knowledge base ("second brain").
+model AiKnowledgeEntry {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  /// Internal InstagramAccount.id.
+  instagramAccountId String
+  title              String
+  content            String
+  enabled            Boolean  @default(true)
+  position           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@index([instagramAccountId, position])
+}
+
+/// A link the assistant may send as a button, and when to send it.
+model AiLink {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+  /// Button title, at most 20 characters (Instagram's limit).
+  label              String
+  url                String
+  /// When the assistant should send it, in plain words.
+  description        String   @default("")
+  enabled            Boolean  @default(true)
+  position           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@index([instagramAccountId, position])
+}
+
 model AiDraft {
   id                 String        @id @default(cuid())
   workspaceId        String
@@ -379,6 +423,12 @@ model AiDraft {
   decidedAt          DateTime?
   sentAt             DateTime?
   sentMessageId      String?
+  /// The AiLink the reply carries as a button (null: text only).
+  actionLinkId       String?
+  /// The person asked something the knowledge does not answer.
+  knowledgeGap       Boolean       @default(false)
+  /// That question, shortened, for the gaps list.
+  gapQuestion        String?
 
   workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
@@ -391,28 +441,28 @@ model AiDraft {
 }
 
 model DmLog {
-  id                 String     @id @default(cuid())
+  id                 String @id @default(cuid())
   workspaceId        String
   automationId       String
   instagramAccountId String
 
-  commenterId   String
-  commenterName String?
-  commentText   String
-  commentId     String
+  commenterId    String
+  commenterName  String?
+  commentText    String
+  commentId      String
   matchedKeyword String?
-  status        DmStatus @default(PENDING)
-  attempts      Int      @default(0)
-  dmSentAt      DateTime?
-  errorMessage  String?
+  status         DmStatus  @default(PENDING)
+  attempts       Int       @default(0)
+  dmSentAt       DateTime?
+  errorMessage   String?
 
   // The public comment reply is delivered independently of the DM, so its
   // outcome is tracked separately. publicReplySentAt makes it idempotent across
   // retries; a DM failure never blocks or re-posts the public reply.
-  dmDeliveryUnconfirmed Boolean @default(false)
-  publicReplyDeliveryUnconfirmed Boolean @default(false)
-  publicReplySentAt DateTime?
-  publicReplyError  String?
+  dmDeliveryUnconfirmed          Boolean   @default(false)
+  publicReplyDeliveryUnconfirmed Boolean   @default(false)
+  publicReplySentAt              DateTime?
+  publicReplyError               String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -492,14 +542,14 @@ model LinkClick {
 }
 
 model WebhookEvent {
-  id          String        @id @default(cuid())
-  workspaceId String?
-  object      String?
-  payload     Json
-  status      WebhookStatus @default(PENDING)
+  id           String        @id @default(cuid())
+  workspaceId  String?
+  object       String?
+  payload      Json
+  status       WebhookStatus @default(PENDING)
   errorMessage String?
-  createdAt   DateTime      @default(now())
-  processedAt DateTime?
+  createdAt    DateTime      @default(now())
+  processedAt  DateTime?
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
 
@@ -508,13 +558,13 @@ model WebhookEvent {
 }
 
 model OperationalEvent {
-  id          String                @id @default(cuid())
+  id          String                 @id @default(cuid())
   workspaceId String?
   source      OperationalEventSource
-  level       OperationalEventLevel @default(INFO)
+  level       OperationalEventLevel  @default(INFO)
   message     String
   payload     Json?
-  createdAt   DateTime              @default(now())
+  createdAt   DateTime               @default(now())
   resolvedAt  DateTime?
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
@@ -577,25 +627,24 @@ enum OperationalEventLevel {
   ERROR
 }
 
-
 enum InstagramProvider {
   META
   ZERNIO
 }
 
 model ZernioConnection {
-  workspaceId    String @id
-  apiKey         String
-  profileId      String?
-  webhookId      String?
-  webhookSecret  String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspaceId   String    @id
+  apiKey        String
+  profileId     String?
+  webhookId     String?
+  webhookSecret String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 // Claims persist independently of BullMQ retention so old taps never resend.
 model PostbackDelivery {
-  id String @id
+  id        String   @id
   createdAt DateTime @default(now())
 }

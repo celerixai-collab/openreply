@@ -93,6 +93,8 @@ const h = vi.hoisted(() => {
     mockPrisma: {
       aiDraft,
       instagramAccount: { findUnique: vi.fn(), findFirst: vi.fn() },
+      aiKnowledgeEntry: { findMany: vi.fn(async () => [] as Row[]) },
+      aiLink: { findMany: vi.fn(async () => [] as Row[]), findUnique: vi.fn(async () => null as Row | null) },
       contact: { findUnique: vi.fn() },
       automation: { findMany: vi.fn() },
       postbackDelivery: {
@@ -113,6 +115,7 @@ const h = vi.hoisted(() => {
         lists.set(key, (lists.get(key) ?? []).slice(start));
       }),
       exists: vi.fn(async (key: string) => (keys.has(key) ? 1 : 0)),
+      get: vi.fn(async (key: string) => keys.get(key) ?? null),
       set: vi.fn(async (key: string, value: string) => {
         keys.set(key, value);
         return "OK";
@@ -131,6 +134,7 @@ const h = vi.hoisted(() => {
     mockFindConversation: vi.fn(),
     mockGetMessages: vi.fn(),
     mockSendDirectMessage: vi.fn(),
+    mockSendLinkButton: vi.fn(),
     mockQueueAdd: vi.fn(),
   };
 });
@@ -149,6 +153,7 @@ vi.mock("@/lib/instagram/provider", () => ({
   ),
   hasInstagramCredentials: (account: { accessToken?: string }) => Boolean(account.accessToken),
   sendDirectMessage: h.mockSendDirectMessage,
+  sendDirectMessageWithLinkButton: h.mockSendLinkButton,
 }));
 vi.mock("@/lib/ai/queue", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ai/queue")>()),
@@ -156,7 +161,8 @@ vi.mock("@/lib/ai/queue", async (importOriginal) => ({
 }));
 
 import { MetaApiError, PermissionError } from "@/lib/meta/client";
-import { processAiDraft, processAiEcho, processSendAiDraft } from "../lib/ai/worker";
+import { processAiDraft, processAiEcho, processAiPlayground, processSendAiDraft } from "../lib/ai/worker";
+import { readPlaygroundResult } from "../lib/ai/playground";
 import { recordBotSend } from "../lib/ai/takeover";
 import { requestDraftSend, dismissDraft, expireStaleAiDrafts } from "../lib/ai/drafts";
 import { burstKey } from "../lib/ai/trigger";
@@ -200,6 +206,10 @@ function claudeReply(overrides: Record<string, unknown> = {}): Anthropic.Message
           handoff_reason: null,
           language: "zh-TW",
           confidence: "high",
+          send_link_id: null,
+          knowledge_gap: false,
+          gap_question: null,
+          used_topics: [],
           ...overrides,
         }),
       },
@@ -677,3 +687,86 @@ describe("auto mode, human takeover and links", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("second brain: links, gaps and the playground", () => {
+  const link = { id: "link_1", label: "加入名單", url: "https://example.com/w", description: "想加入時" };
+
+  it("stores the link the assistant chose and the gap flags on the draft", async () => {
+    h.mockPrisma.aiLink.findMany.mockResolvedValue([link]);
+    create = vi.fn(async () => claudeReply({ reply_text: "連結在下面 👇", intent: "link_request", send_link_id: "link_1" }));
+    seedBurst(["mid_2", "我要加入"]);
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("created");
+
+    expect(h.drafts[0]).toMatchObject({ actionLinkId: "link_1", knowledgeGap: false, needsHuman: false });
+    const body = (create.mock.calls[0] as unknown as [Anthropic.MessageCreateParamsNonStreaming])[0];
+    expect(JSON.stringify(body.system)).toContain("id: link_1");
+  });
+
+  it("never keeps a link id the assistant made up", async () => {
+    h.mockPrisma.aiLink.findMany.mockResolvedValue([link]);
+    create = vi.fn(async () => claudeReply({ intent: "link_request", send_link_id: "made_up" }));
+    seedBurst(["mid_2", "連結？"]);
+
+    await processAiDraft(job("mid_2"), deps());
+
+    expect(h.drafts[0]).toMatchObject({ actionLinkId: null, needsHuman: true });
+  });
+
+  it("records a question the knowledge does not answer", async () => {
+    create = vi.fn(async () =>
+      claudeReply({ knowledge_gap: true, gap_question: "有沒有英文版？", needs_human: true, handoff_reason: "知識庫沒有" })
+    );
+    seedBurst(["mid_2", "有英文版嗎"]);
+
+    await processAiDraft(job("mid_2"), deps());
+
+    expect(h.drafts[0]).toMatchObject({ knowledgeGap: true, gapQuestion: "有沒有英文版？", needsHuman: true });
+  });
+
+  it("sends a reply with a link as a button message", async () => {
+    h.mockPrisma.aiLink.findUnique.mockResolvedValue(link);
+    h.mockSendLinkButton.mockResolvedValue({ recipient_id: "fan_1", message_id: "sent_link_1" });
+    seedDraft({
+      status: "SENDING",
+      finalText: "連結在下面 👇",
+      actionLinkId: "link_1",
+      instagramAccount: { id: "acct_1", instagramId: "ig_456", provider: "META", accessToken: "encrypted", workspaceId: "ws_1", zernioAccountId: null },
+    });
+
+    await expect(processSendAiDraft({ data: { draftId: "draft_x" } })).resolves.toBe("sent");
+
+    expect(h.mockSendLinkButton).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "fan_1", text: "連結在下面 👇", buttons: [{ title: "加入名單", url: "https://example.com/w" }] })
+    );
+    expect(h.mockSendDirectMessage).not.toHaveBeenCalled();
+  });
+
+  it("answers in the playground without sending anything or storing a draft", async () => {
+    vi.stubEnv("REDIS_URL", "redis://test");
+    h.mockPrisma.aiLink.findMany.mockResolvedValue([link]);
+    (h.mockPrisma as unknown as { aiAssistant: { findUnique: ReturnType<typeof vi.fn> } }).aiAssistant = {
+      findUnique: vi.fn(async () => ({ ...assistant, mode: "auto" })),
+    };
+    create = vi.fn(async () => claudeReply({ reply_text: "連結在下面 👇", intent: "link_request", send_link_id: "link_1", used_topics: ["名單"] }));
+
+    await processAiPlayground(
+      { data: { playgroundId: "pg_1", accountId: "acct_1", turns: [{ from: "person", text: "我要加入" }] } },
+      deps()
+    );
+
+    const result = await readPlaygroundResult("pg_1");
+    expect(result).toMatchObject({
+      status: "done",
+      replyText: "連結在下面 👇",
+      link: { id: "link_1", label: "加入名單" },
+      outgoingText: `${DISCLOSURE}\n連結在下面 👇`,
+      wouldAutoSend: true,
+      usedTopics: ["名單"],
+    });
+    expect(h.drafts).toHaveLength(0);
+    expect(h.mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(h.mockSendLinkButton).not.toHaveBeenCalled();
+  });
+});
+

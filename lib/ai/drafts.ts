@@ -14,6 +14,7 @@ import {
   utf8ByteLength,
 } from "./constants";
 import { getAiQueue, SEND_AI_DRAFT_JOB_NAME, sendAiDraftJobId } from "./queue";
+import { BRAIN_LIMITS } from "./brain";
 
 // Drafts that can still be sent: a FAILED one is a confirmed non-delivery
 // (or a draft the model could not write), so typing a reply and sending it
@@ -90,11 +91,14 @@ export async function requestDraftSend({
   workspaceId,
   draftId,
   text,
+  withLink = true,
   now = new Date(),
 }: {
   workspaceId: string;
   draftId: string;
   text: unknown;
+  // false sends the reply without the link button the assistant attached.
+  withLink?: boolean;
   now?: Date;
 }): Promise<SendResult> {
   const body = typeof text === "string" ? text.trim() : "";
@@ -109,6 +113,7 @@ export async function requestDraftSend({
       status: true,
       igsid: true,
       instagramAccountId: true,
+      actionLinkId: true,
       instagramAccount: { select: { aiAssistant: { select: { disclosureText: true } } } },
     },
   });
@@ -128,6 +133,16 @@ export async function requestDraftSend({
   const firstReply = !(await peopleWithSentReply([person])).has(personKey(person));
   const disclosure = draft.instagramAccount.aiAssistant?.disclosureText ?? "";
   const finalText = composeOutgoingText(body, disclosure, firstReply);
+  const actionLinkId = withLink ? draft.actionLinkId : null;
+  if (actionLinkId && [...finalText].length > BRAIN_LIMITS.buttonText) {
+    return {
+      ok: false,
+      httpStatus: 400,
+      code: "too_long",
+      bytes: utf8ByteLength(finalText),
+      error: `With a link button Instagram allows ${BRAIN_LIMITS.buttonText} characters; this reply has ${[...finalText].length}`,
+    };
+  }
   if (!outgoingTextFits(finalText)) {
     return {
       ok: false,
@@ -155,7 +170,7 @@ export async function requestDraftSend({
 
   const claimed = await prisma.aiDraft.updateMany({
     where: { id: draft.id, workspaceId, status: { in: SENDABLE_STATUSES } },
-    data: { status: "SENDING", finalText, error: null, decidedAt: now },
+    data: { status: "SENDING", finalText, actionLinkId, error: null, decidedAt: now },
   });
   if (claimed.count === 0) {
     return {

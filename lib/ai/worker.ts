@@ -19,9 +19,17 @@ import {
   createInstagramContext,
   hasInstagramCredentials,
   sendDirectMessage,
+  sendDirectMessageWithLinkButton,
 } from "@/lib/instagram/provider";
 import { claimOnce } from "@/lib/contacts/contacts";
-import { AI_MODE_AUTO, AI_MODEL, DM_WINDOW_MS } from "./constants";
+import {
+  AI_MODE_AUTO,
+  AI_MODEL,
+  DEFAULT_DISCLOSURE_TEXT,
+  DM_WINDOW_MS,
+  composeOutgoingText,
+} from "./constants";
+import { writePlaygroundResult } from "./playground";
 import { requestDraftSend } from "./drafts";
 import { isAiPaused, isBotSend, pauseAiFor } from "./takeover";
 import { getAnthropicClient, isAiConfigured, type AnthropicMessagesClient } from "./client";
@@ -32,13 +40,16 @@ import {
 } from "./generate";
 import { loadConversationHistory, type LoadedTurn } from "./history";
 import { buildSystemBlocks, buildUserMessage, type HistoryTurn } from "./prompt";
+import { allowedLinkText, compileKnowledge, type BrainLink } from "./brain";
 import {
   AI_DRAFT_JOB_NAME,
   AI_ECHO_JOB_NAME,
+  AI_PLAYGROUND_JOB_NAME,
   AI_QUEUE_NAME,
   SEND_AI_DRAFT_JOB_NAME,
   type AiDraftJob,
   type AiEchoJob,
+  type AiPlaygroundJob,
   type AiQueueJob,
   type SendAiDraftJob,
 } from "./queue";
@@ -73,6 +84,61 @@ export type DraftOutcome =
   | "created"
   | "sent"
   | "failed";
+
+type AssistantPromptSettings = {
+  role: string;
+  voice: string;
+  guardrails: string;
+  goals: string;
+  knowledge: string;
+};
+
+/**
+ * Everything the model reads about the account: settings, enabled knowledge
+ * entries, sendable links and active campaigns, in a fixed order (it is the
+ * cached system prompt). Also what the reply may contain: allowed URLs and
+ * link ids.
+ */
+export async function loadAssistantBrain(
+  accountId: string,
+  assistant: AssistantPromptSettings
+) {
+  const [entries, linkRows, campaigns] = await Promise.all([
+    prisma.aiKnowledgeEntry.findMany({
+      where: { instagramAccountId: accountId, enabled: true },
+      orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { title: true, content: true },
+    }),
+    prisma.aiLink.findMany({
+      where: { instagramAccountId: accountId, enabled: true },
+      orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, label: true, url: true, description: true },
+    }),
+    prisma.automation.findMany({
+      where: { instagramAccountId: accountId, isActive: true },
+      select: {
+        name: true,
+        goal: true,
+        keywords: true,
+        matchAnyWord: true,
+        dmTriggerEnabled: true,
+        postId: true,
+        matchAnyPost: true,
+        collectEmail: true,
+        requireFollow: true,
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    }),
+  ]);
+  const links: BrainLink[] = linkRows;
+  const knowledge = compileKnowledge(entries, assistant.knowledge);
+  return {
+    system: buildSystemBlocks({ ...assistant, knowledge }, campaigns, links),
+    allowedText: allowedLinkText(knowledge, links),
+    linkIds: links.map((link) => link.id),
+    links,
+  };
+}
 
 /**
  * Write one draft. The job for the newest message of a burst writes a single
@@ -204,35 +270,21 @@ export async function processAiDraft(
     model: assistant.model || AI_MODEL,
   };
 
-  const campaigns = await prisma.automation.findMany({
-    where: { instagramAccountId: account.id, isActive: true },
-    select: {
-      name: true,
-      goal: true,
-      keywords: true,
-      matchAnyWord: true,
-      dmTriggerEnabled: true,
-      postId: true,
-      matchAnyPost: true,
-      collectEmail: true,
-      requireFollow: true,
-    },
-    // Fixed order: the list is part of the cached system prompt.
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-  });
+  const brain = await loadAssistantBrain(account.id, assistant);
 
   let draft;
   try {
     const generated = await generateDraftReply({
       client: deps.getClient(),
       model: base.model,
-      system: buildSystemBlocks(assistant, campaigns),
+      system: brain.system,
       userMessage: buildUserMessage(historyTurns, latestTurns),
     });
     draft = finalizeDraft(generated, {
       disclosureText: assistant.disclosureText,
       firstReply,
-      knowledge: assistant.knowledge,
+      knowledge: brain.allowedText,
+      linkIds: brain.linkIds,
     });
   } catch (error) {
     const failure = classifyAnthropicError(error);
@@ -268,6 +320,9 @@ export async function processAiDraft(
           handoffReason: draft.handoffReason,
           language: draft.language || null,
           confidence: draft.confidence,
+          actionLinkId: draft.linkId,
+          knowledgeGap: draft.knowledgeGap,
+          gapQuestion: draft.gapQuestion,
           inputTokens: draft.usage.inputTokens,
           outputTokens: draft.usage.outputTokens,
           cacheReadTokens: draft.usage.cacheReadTokens,
@@ -370,14 +425,27 @@ export async function processSendAiDraft(
   const claimId = `ai-draft-send:${draft.id}`;
   if (!(await claimOnce(claimId))) return "already_claimed";
 
+  // A reply the assistant attached a link to goes out as a button message.
+  const link = draft.actionLinkId
+    ? await prisma.aiLink.findUnique({ where: { id: draft.actionLinkId } })
+    : null;
+
   let messageId: string | undefined;
   try {
-    const result = await sendDirectMessage({
-      context,
-      instagramAccountId: account.instagramId,
-      userId: draft.igsid,
-      message: draft.finalText,
-    });
+    const result = link
+      ? await sendDirectMessageWithLinkButton({
+          context,
+          instagramAccountId: account.instagramId,
+          userId: draft.igsid,
+          text: draft.finalText,
+          buttons: [{ title: link.label, url: link.url }],
+        })
+      : await sendDirectMessage({
+          context,
+          instagramAccountId: account.instagramId,
+          userId: draft.igsid,
+          message: draft.finalText,
+        });
     messageId = result?.message_id;
   } catch (error) {
     if (isConfirmedSendRejection(error)) {
@@ -401,6 +469,86 @@ export async function processSendAiDraft(
   return "sent";
 }
 
+/**
+ * A playground run: the same prompt, knowledge, links and checks as a real
+ * draft, on a made-up conversation. The result goes to Redis for the page;
+ * nothing is sent and nothing is stored as a draft.
+ */
+export async function processAiPlayground(
+  job: Pick<Job<AiPlaygroundJob>, "data">,
+  deps: AiWorkerDeps = defaultDeps
+): Promise<void> {
+  const { playgroundId, accountId, turns } = job.data;
+  try {
+    if (!isAiConfigured()) {
+      await writePlaygroundResult(playgroundId, {
+        status: "error",
+        error: "ANTHROPIC_API_KEY is not set on the worker",
+      });
+      return;
+    }
+    const assistant = await prisma.aiAssistant.findUnique({
+      where: { instagramAccountId: accountId },
+    });
+    const settings = {
+      role: assistant?.role ?? "",
+      voice: assistant?.voice ?? "",
+      guardrails: assistant?.guardrails ?? "",
+      goals: assistant?.goals ?? "",
+      knowledge: assistant?.knowledge ?? "",
+    };
+    const disclosureText = assistant?.disclosureText ?? DEFAULT_DISCLOSURE_TEXT;
+    const brain = await loadAssistantBrain(accountId, settings);
+
+    // The trailing messages from the person are what the reply answers.
+    let split = turns.length;
+    while (split > 0 && turns[split - 1].from === "person") split -= 1;
+    const toTurn = (turn: { from: "person" | "creator"; text: string }): HistoryTurn => ({
+      from: turn.from,
+      text: turn.text,
+      at: null,
+    });
+    const history = turns.slice(0, split).map(toTurn);
+    const latest = turns.slice(split).map(toTurn);
+    const firstReply = !turns.some((turn) => turn.from === "creator");
+
+    const generated = await generateDraftReply({
+      client: deps.getClient(),
+      model: assistant?.model || AI_MODEL,
+      system: brain.system,
+      userMessage: buildUserMessage(history, latest),
+    });
+    const draft = finalizeDraft(generated, {
+      disclosureText,
+      firstReply,
+      knowledge: brain.allowedText,
+      linkIds: brain.linkIds,
+    });
+    const link = draft.linkId ? brain.links.find((item) => item.id === draft.linkId) ?? null : null;
+    await writePlaygroundResult(playgroundId, {
+      status: "done",
+      replyText: draft.replyText,
+      intent: draft.intent,
+      needsHuman: draft.needsHuman,
+      handoffReason: draft.handoffReason,
+      confidence: draft.confidence,
+      language: draft.language,
+      link: link ? { id: link.id, label: link.label, url: link.url } : null,
+      knowledgeGap: draft.knowledgeGap,
+      gapQuestion: draft.gapQuestion,
+      usedTopics: draft.usedTopics,
+      outgoingText: composeOutgoingText(draft.replyText, disclosureText, firstReply),
+      wouldAutoSend:
+        assistant?.mode === AI_MODE_AUTO && !draft.needsHuman && Boolean(draft.replyText),
+    });
+  } catch (error) {
+    const failure = classifyAnthropicError(error);
+    await writePlaygroundResult(playgroundId, { status: "error", error: failure.message }).catch(
+      () => undefined
+    );
+  }
+}
+
 export async function processAiJob(
   job: Job<AiQueueJob>,
   deps: AiWorkerDeps = defaultDeps
@@ -415,6 +563,10 @@ export async function processAiJob(
   }
   if (job.name === AI_ECHO_JOB_NAME) {
     await processAiEcho(job as Job<AiEchoJob>);
+    return;
+  }
+  if (job.name === AI_PLAYGROUND_JOB_NAME) {
+    await processAiPlayground(job as Job<AiPlaygroundJob>, deps);
   }
 }
 

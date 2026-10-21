@@ -11,6 +11,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { AI_INTENTS } from "./constants";
+import { describeLinks, type BrainLink } from "./brain";
 
 export type HistoryTurn = {
   from: "person" | "creator";
@@ -49,7 +50,8 @@ export const FIXED_SYSTEM_PROMPT = `You write Instagram direct-message replies f
 ## Facts
 - State facts only from <knowledge> and <campaigns>. If the answer is not there, do not guess: say the creator will get back to them personally, and set needs_human to true.
 - Never promise discounts, prices, dates, refunds, collaborations, gifts, results or anything else that <knowledge> does not state. Never invent scarcity or deadlines.
-- Links: you may share a link only if it appears in <knowledge>, copied character for character, and only when it is what the person needs right now. Never make up, shorten or change a link. When a campaign in <campaigns> delivers what they ask for and <knowledge> has no link for it, tell them how to get it, using the keyword exactly as written: for a DM keyword, ask them to send that keyword (in Traditional Chinese, for example: 傳「關鍵字」給我就會收到連結); for a comment keyword, ask them to comment it on the post.
+- Sending a link: when the person needs one of <links> right now, set send_link_id to that link's id. It goes out as a button under reply_text, so do not write its URL in reply_text; just say it is below (for example: 連結在下面 👇). At most one link per reply. Do not send a link again that <conversation> shows they already got, unless they ask for it again.
+- A URL in reply_text is allowed only if it appears in <knowledge>, copied character for character. Never make up, shorten or change a link. When a campaign in <campaigns> delivers what they ask for and neither <links> nor <knowledge> has a link for it, tell them how to get it, using the keyword exactly as written: for a DM keyword, ask them to send that keyword (in Traditional Chinese, for example: 傳「關鍵字」給我就會收到連結); for a comment keyword, ask them to comment it on the post.
 - Never ask for passwords, card or bank numbers or ID numbers, and do not ask for an email address: campaigns that need one ask for it themselves.
 - If the person asks whether they are talking to a bot or a person, be honest: you are the creator's AI assistant, and the creator reads these conversations and replies personally when needed.
 
@@ -83,7 +85,11 @@ When handing off, still write a short polite holding reply (for example, thanks 
 - needs_human: whether the creator should answer personally.
 - handoff_reason: one short sentence when needs_human is true, otherwise null.
 - language: the language of reply_text as a BCP 47 tag, such as zh-TW, en or ja.
-- confidence: high, medium or low - how sure you are that reply_text is correct and complete using only the facts you were given.`;
+- confidence: high, medium or low - how sure you are that reply_text is correct and complete using only the facts you were given.
+- send_link_id: the id of the one link in <links> to send as a button with this reply, or null.
+- knowledge_gap: true when the person asked something that <knowledge> does not answer, otherwise false.
+- gap_question: when knowledge_gap is true, their question in one short sentence in Traditional Chinese (for the creator to add an answer); otherwise null.
+- used_topics: the 【titles】 of the <knowledge> entries the reply relies on, exactly as written there; an empty list when it relies on none.`;
 
 function section(tag: string, value: string): string {
   const text = value.trim();
@@ -128,7 +134,8 @@ export function describeCampaigns(campaigns: CampaignSummary[]): string {
 
 export function buildSystemBlocks(
   settings: AssistantSettings,
-  campaigns: CampaignSummary[]
+  campaigns: CampaignSummary[],
+  links: BrainLink[] = []
 ): Anthropic.TextBlockParam[] {
   const accountPrompt = [
     "The creator's settings. Follow <guardrails> too, unless a rule above says otherwise.",
@@ -137,6 +144,7 @@ export function buildSystemBlocks(
     section("guardrails", settings.guardrails),
     section("goals", settings.goals),
     section("knowledge", settings.knowledge),
+    section("links", describeLinks(links)),
     section("campaigns", describeCampaigns(campaigns)),
   ].join("\n\n");
 
