@@ -308,6 +308,10 @@ async function sweepCampaign({
         commentId: { in: needsAction.map((c) => c.id) },
         status: { in: ["PENDING", "FAILED"] },
         dmDeliveryUnconfirmed: true,
+        // Once only: a retry that comes back unconfirmed too (Instagram
+        // answered "unknown error", which it also does for a second private
+        // reply to the same comment) is left for a person to check.
+        attempts: { lt: 2 },
         updatedAt: { lt: new Date(Date.now() - UNCONFIRMED_RETRY_AFTER_MS) },
       },
       data: { dmDeliveryUnconfirmed: false },
