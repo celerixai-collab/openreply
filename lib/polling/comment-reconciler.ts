@@ -316,6 +316,34 @@ async function sweepCampaign({
       },
       data: { dmDeliveryUnconfirmed: false },
     });
+    // A public reply left unconfirmed can be settled from the comment itself:
+    // a reply by the account under it means it landed; none after a while
+    // means it did not, and it may be posted again.
+    const ownerRepliedTo = new Set(
+      needsAction
+        .filter((c) => (c.replies?.data ?? []).some((r) => r.from?.id === account.instagramId))
+        .map((c) => c.id)
+    );
+    if (automation.publicReplyEnabled) {
+      const unsettled = await prisma.dmLog.findMany({
+        where: {
+          automationId: automation.id,
+          commentId: { in: needsAction.map((c) => c.id) },
+          publicReplyDeliveryUnconfirmed: true,
+          publicReplySentAt: null,
+          updatedAt: { lt: new Date(Date.now() - UNCONFIRMED_RETRY_AFTER_MS) },
+        },
+        select: { commentId: true },
+      });
+      for (const { commentId } of unsettled) {
+        await prisma.dmLog.update({
+          where: { automationId_commentId: { automationId: automation.id, commentId } },
+          data: ownerRepliedTo.has(commentId)
+            ? { publicReplySentAt: new Date(), publicReplyDeliveryUnconfirmed: false }
+            : { publicReplyDeliveryUnconfirmed: false },
+        });
+      }
+    }
     const logs = await prisma.dmLog.findMany({
       where: {
         automationId: automation.id,

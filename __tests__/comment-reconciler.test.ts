@@ -11,7 +11,7 @@ const { mockPrisma, queueAdd, readComments } = vi.hoisted(() => ({
   mockPrisma: {
     $queryRaw: vi.fn(),
     automation: { findMany: vi.fn() },
-    dmLog: { findMany: vi.fn(), updateMany: vi.fn(async () => ({ count: 0 })) },
+    dmLog: { findMany: vi.fn(), updateMany: vi.fn(async () => ({ count: 0 })), update: vi.fn(async () => ({})) },
     operationalEvent: { create: vi.fn() },
   },
   queueAdd: vi.fn(),
