@@ -1928,21 +1928,16 @@ it("deduplicates a redelivered Meta button tap after queue retention expires", a
   expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
 });
 
-it("posts the public reply only after the DM is sent", async () => {
+it("posts the public reply first, even when the DM then fails", async () => {
   const { sendCommentReply } = await import("@/lib/meta/client");
   vi.mocked(sendCommentReply).mockReset().mockResolvedValue({ id: "public-reply" });
   mockPrisma.automation.findMany.mockResolvedValue([{ ...mockAutomation, publicReplyEnabled: true, publicReplyMessages: ["Sent!"] }]);
   mockSendPrivateReply.mockRejectedValue(new MetaApiError(10, undefined, undefined, "refused"));
 
   await expect(getProcessor()(createMockJob())).rejects.toThrow("refused");
-  expect(sendCommentReply).not.toHaveBeenCalled();
-
-  mockSendPrivateReply.mockReset().mockResolvedValue({ message_id: "m1" });
-  await getProcessor()({ ...createMockJob(), id: "retry" });
-  expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
   expect(sendCommentReply).toHaveBeenCalledTimes(1);
-  expect(mockSendPrivateReply.mock.invocationCallOrder[0]).toBeLessThan(
-    vi.mocked(sendCommentReply).mock.invocationCallOrder[0]
+  expect(vi.mocked(sendCommentReply).mock.invocationCallOrder[0]).toBeLessThan(
+    mockSendPrivateReply.mock.invocationCallOrder[0]
   );
 });
 
@@ -1950,11 +1945,7 @@ it("retains the public reply claim if sending succeeded but its log write failed
   const { sendCommentReply } = await import("@/lib/meta/client");
   vi.mocked(sendCommentReply).mockResolvedValue({ id: "public-reply" });
   mockPrisma.automation.findMany.mockResolvedValue([{ ...mockAutomation, publicReplyEnabled: true, publicReplyMessages: ["Sent!"] }]);
-  // The public reply now goes out after the DM: the first log write is the
-  // DM's SENT, the second the public reply's.
-  mockPrisma.dmLog.update
-    .mockResolvedValueOnce({})
-    .mockRejectedValueOnce(new Error("Lost database connection after public send"));
+  mockPrisma.dmLog.update.mockRejectedValueOnce(new Error("Lost database connection after public send"));
   const process = getProcessor();
   await process(createMockJob());
   expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ publicReplyDeliveryUnconfirmed: true }) }));
