@@ -38,3 +38,22 @@ export async function requeueThrottledComments(): Promise<number> {
   console.log(`[DM Worker] Re-queued ${count} throttled comments for a paced re-send`);
   return count;
 }
+
+/**
+ * One-time undo of the short-lived "one DM per person" rule (2026-10-20):
+ * every comment gets its campaign's DM again, as upstream OpenReply does, so
+ * comments skipped under that rule go back to the reconciler.
+ */
+export async function requeuePersonDedupSkips(): Promise<number> {
+  if (!(await claimOnce("requeue-person-dedup-2026-10-21"))) return 0;
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      status: "SKIPPED_DEDUP",
+      errorMessage: "This person already got this campaign's DM for an earlier comment",
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    data: { status: "PENDING", attempts: 0, dmDeliveryUnconfirmed: false, errorMessage: null },
+  });
+  console.log(`[DM Worker] Re-queued ${count} comments skipped as repeat comments`);
+  return count;
+}

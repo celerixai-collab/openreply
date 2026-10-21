@@ -5,7 +5,7 @@ import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
-import { requeueThrottledComments } from "@/lib/queue/requeue-throttled";
+import { requeuePersonDedupSkips, requeueThrottledComments } from "@/lib/queue/requeue-throttled";
 import os from "node:os";
 
 const worker = createDMWorker();
@@ -22,6 +22,12 @@ const POLL_INTERVAL_MS = Number(
 
 console.log("[DM Worker] Started");
 
+void requeuePersonDedupSkips().catch((error) =>
+  console.error(
+    "[DM Worker] Re-queueing repeat comments failed:",
+    error instanceof Error ? error.message : error
+  )
+);
 void requeueThrottledComments().catch((error) =>
   console.error(
     "[DM Worker] Re-queueing throttled comments failed:",

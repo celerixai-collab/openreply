@@ -594,24 +594,6 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
-    // One DM per person per campaign, for their first comment: someone who
-    // comments again, or several times before the campaign existed, is not
-    // messaged again. A comment whose DM is still on its way counts too (the
-    // older one goes first), so two comments never race; one that failed for
-    // good does not, and then a later comment gets its chance.
-    if (await personAlreadyServed(automation.id, commenterId, commentId)) {
-      await prisma.dmLog.update({
-        where: { automationId_commentId: { automationId: automation.id, commentId } },
-        data: {
-          status: "SKIPPED_DEDUP",
-          matchedKeyword: matchResult.matchedKeyword,
-          errorMessage: "This person already got this campaign's DM for an earlier comment",
-        },
-      });
-      await postPublicReply();
-      continue;
-    }
-
     // Email gate: read before anything is reserved, so a failed lookup has
     // nothing to hand back.
     const emailOwed = await emailStillNeeded(automation, commenterId);
@@ -973,38 +955,6 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     // the DmLog and never fails the job.
     await postPublicReply();
   }
-}
-
-/**
- * Whether another comment by the same person already has (or is getting)
- * this campaign's DM. Between two comments still in progress, the one logged
- * first wins, ties broken by comment id, so exactly one of them goes ahead.
- */
-async function personAlreadyServed(
-  automationId: string,
-  commenterId: string,
-  commentId: string
-): Promise<boolean> {
-  const mine = await prisma.dmLog.findUnique({
-    where: { automationId_commentId: { automationId, commentId } },
-    select: { createdAt: true },
-  });
-  const others = await prisma.dmLog.findMany({
-    where: {
-      automationId,
-      commenterId,
-      commentId: { not: commentId },
-      status: { in: ["SENT", "PENDING"] },
-    },
-    select: { commentId: true, status: true, createdAt: true },
-  });
-  return others.some(
-    (other) =>
-      other.status === "SENT" ||
-      !mine ||
-      other.createdAt < mine.createdAt ||
-      (other.createdAt.getTime() === mine.createdAt.getTime() && other.commentId < commentId)
-  );
 }
 
 async function sendPostbackOnce({

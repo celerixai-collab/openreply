@@ -636,22 +636,10 @@ describe("DM Worker — Full Pipeline", () => {
     );
   });
 
-  it("DMs a person once per campaign, for their first comment", async () => {
+  it("DMs every comment, also a person's second one", async () => {
     mockPrisma.dmLog.findMany.mockResolvedValue([
       { commentId: "comment_earlier", status: "SENT", createdAt: new Date(0) },
     ]);
-
-    await getProcessor()(createMockJob());
-
-    expect(mockSendPrivateReply).not.toHaveBeenCalled();
-    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "SKIPPED_DEDUP" }) })
-    );
-  });
-
-  it("lets a later comment through when the earlier one failed for good", async () => {
-    // Only SENT and PENDING logs are asked for: a FAILED one is not returned.
-    mockPrisma.dmLog.findMany.mockResolvedValue([]);
 
     await getProcessor()(createMockJob());
 
