@@ -22,8 +22,14 @@ let client: Anthropic | null = null;
 export function getAnthropicClient(): AnthropicMessagesClient {
   if (!client) {
     // Reads ANTHROPIC_API_KEY from the environment. The SDK retries 429, 5xx
-    // and connection errors itself (maxRetries, default 2).
-    client = new Anthropic({ maxRetries: 2, timeout: 90_000 });
+    // and connection errors itself (maxRetries, default 2). A key that is not
+    // scoped to a workspace needs the workspace id on every request.
+    const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+    client = new Anthropic({
+      maxRetries: 2,
+      timeout: 90_000,
+      ...(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {}),
+    });
   }
   return client;
 }
