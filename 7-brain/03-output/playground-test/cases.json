@@ -98,8 +98,10 @@
    ]
   ],
   "expect": {
-   "mentions": [
-    "AI"
+   "notMentions": [
+    "我是真人",
+    "我是 Leo",
+    "我就是 Leo"
    ],
    "maxChars": 90
   }
@@ -308,7 +310,11 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 90
+   "maxChars": 90,
+   "notMentions": [
+    "我是 AI",
+    "小助理"
+   ]
   }
  },
  {
