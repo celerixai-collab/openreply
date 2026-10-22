@@ -4,7 +4,7 @@ import { WAITLIST_ORIGINS, resolveWaitlistRef } from "@/lib/tracking/waitlist-re
 
 /**
  * Public, for the waitlist page only: who a waitlist link was sent to.
- * GET ?s=<link slug>&r=<recipient token> → { username, campaign } or 404.
+ * GET ?s=<link slug>&r=<recipient token, optional> → { campaign, username|null } or 404.
  */
 function corsHeaders(request: NextRequest): Record<string, string> {
   const origin = request.headers.get("origin");
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   const headers = corsHeaders(request);
   const slug = request.nextUrl.searchParams.get("s") ?? "";
   const token = parseRecipientToken(request.nextUrl.searchParams.get("r"));
-  if (!token || !/^[A-Za-z0-9_-]{1,32}$/.test(slug)) {
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(slug)) {
     return NextResponse.json({ ok: false }, { status: 400, headers });
   }
 

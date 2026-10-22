@@ -17,7 +17,13 @@ export function hashClickIp(ipAddress: string | null | undefined) {
  * Instagram-scoped ID itself.
  */
 export function hashRecipientId(recipientId: string) {
-  const secret = process.env.NEXTAUTH_SECRET ?? "campaigncue-click-salt";
+  return hashRecipientIdWith(process.env.NEXTAUTH_SECRET ?? DEFAULT_CLICK_SALT, recipientId);
+}
+
+/** The salt used when NEXTAUTH_SECRET is not set (e.g. on a worker host). */
+export const DEFAULT_CLICK_SALT = "campaigncue-click-salt";
+
+export function hashRecipientIdWith(secret: string, recipientId: string) {
   return createHmac("sha256", secret)
     .update(`recipient:${recipientId}`)
     .digest("base64url")

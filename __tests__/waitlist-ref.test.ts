@@ -1,21 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-const { mockPrisma } = vi.hoisted(() => ({
+const { mockPrisma } = vi.hoisted(() => {
+  process.env.NEXTAUTH_SECRET = "test-app-secret";
+  return {
   mockPrisma: {
-    trackedLink: { findUnique: vi.fn() },
-    linkClick: { create: vi.fn() },
+    trackedLink: { findUnique: vi.fn(), findMany: vi.fn() },
+    linkClick: { create: vi.fn(), findMany: vi.fn() },
     dmLog: { findMany: vi.fn() },
     contact: { findFirst: vi.fn() },
   },
-}));
+  };
+});
 
 vi.mock("@/lib/db/client", () => ({ prisma: mockPrisma }));
 
 import { GET as REDIRECT } from "../app/r/[slug]/route";
 import { GET as WHO } from "../app/api/waitlist-ref/route";
-import { hashRecipientId } from "@/lib/tracking/server";
-import { withWaitlistRef } from "@/lib/tracking/waitlist-ref";
+import { DEFAULT_CLICK_SALT, hashRecipientId, hashRecipientIdWith } from "@/lib/tracking/server";
+import { checkWaitlistTaps, withWaitlistRef } from "@/lib/tracking/waitlist-ref";
 
 const WAITLIST = "https://leo-waitlist.vercel.app/studio/";
 const token = hashRecipientId("igsid_amy");
@@ -56,7 +59,8 @@ describe("waitlist links", () => {
     );
     // other campaigns' links are untouched, with or without a token
     expect(await redirect("https://example.com/offer", `?r=${token}`)).toBe("https://example.com/offer");
-    expect(await redirect(WAITLIST, "")).toBe(WAITLIST);
+    // without a token the campaign is still known from the link
+    expect(await redirect(WAITLIST, "")).toBe(`${WAITLIST}?or_s=abc123`);
     expect(withWaitlistRef("https://leo-waitlist.vercel.app.evil.com/", "s", token)).toBe(
       "https://leo-waitlist.vercel.app.evil.com/"
     );
@@ -88,16 +92,49 @@ describe("waitlist ref lookup", () => {
     expect(await (await who(`?s=abc123&r=${token}`)).json()).toMatchObject({ username: "amy.edits" });
   });
 
-  it("answers nothing for other campaigns' links, unknown people and bad input", async () => {
+  it("matches tokens made by a host without NEXTAUTH_SECRET (the worker)", async () => {
+    mockPrisma.trackedLink.findUnique.mockResolvedValue(link(WAITLIST));
+    const workerToken = hashRecipientIdWith(DEFAULT_CLICK_SALT, "igsid_amy");
+    expect(await (await who(`?s=abc123&r=${workerToken}`)).json()).toMatchObject({ username: "amy.edits" });
+  });
+
+  it("still returns the campaign when the person is unknown or there is no token", async () => {
+    mockPrisma.trackedLink.findUnique.mockResolvedValue(link(WAITLIST));
+    for (const query of [`?s=abc123&r=${hashRecipientId("igsid_stranger")}`, "?s=abc123", "?s=abc123&r=short"]) {
+      const response = await who(query);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, campaign: "剪輯室 早鳥等候 A", username: null });
+    }
+  });
+
+  it("answers nothing for other campaigns' links and bad input", async () => {
     mockPrisma.trackedLink.findUnique.mockResolvedValue(link("https://example.com/offer"));
     expect((await who(`?s=abc123&r=${token}`)).status).toBe(404);
     expect(mockPrisma.dmLog.findMany).not.toHaveBeenCalled();
+    expect((await who("?s=bad%20slug!")).status).toBe(400);
 
     mockPrisma.trackedLink.findUnique.mockResolvedValue(link(WAITLIST));
-    expect((await who(`?s=abc123&r=${hashRecipientId("igsid_stranger")}`)).status).toBe(404);
-    expect((await who("?s=abc123&r=short")).status).toBe(400);
-
     const other = await who(`?s=abc123&r=${token}`, "https://evil.example");
     expect(other.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
+describe("waitlist tap check", () => {
+  it("counts recent taps on waitlist links and which ones matched a person", async () => {
+    mockPrisma.trackedLink.findMany.mockResolvedValue([
+      { id: "link_1", destinationUrl: WAITLIST, automationId: "auto_1", automation: { name: "A" } },
+      { id: "link_2", destinationUrl: "https://example.com/", automationId: "auto_2", automation: { name: "Other" } },
+    ]);
+    mockPrisma.linkClick.findMany.mockResolvedValue([
+      { trackedLinkId: "link_1", recipientHash: token, createdAt: new Date() },
+      { trackedLinkId: "link_1", recipientHash: hashRecipientIdWith(DEFAULT_CLICK_SALT, "igsid_bob"), createdAt: new Date() },
+      { trackedLinkId: "link_1", recipientHash: null, createdAt: new Date() },
+    ]);
+    const result = await checkWaitlistTaps("ws_1", new Date(0));
+    expect(mockPrisma.linkClick.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ trackedLinkId: { in: ["link_1"] } }) })
+    );
+    expect(result).toMatchObject({ total: 3, withToken: 2, matchedApp: 1, matchedDefault: 1 });
+    expect(result.taps.map((t) => t.username)).toEqual(["amy.edits", "bob", null]);
   });
 });
