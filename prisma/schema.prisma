@@ -338,6 +338,8 @@ model AiAssistant {
   humanPauseHours        Int      @default(12)
   /// Drafts one person can trigger in 24 hours; later messages get none.
   dailyDraftCapPerPerson Int      @default(10)
+  /// Answer only people one of these campaigns sent a DM to. Empty: everyone.
+  campaignIds            String[] @default([])
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 

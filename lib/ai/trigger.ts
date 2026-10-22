@@ -74,11 +74,20 @@ export async function maybeEnqueueAiDraft(
     select: {
       id: true,
       provider: true,
-      aiAssistant: { select: { enabled: true } },
+      aiAssistant: { select: { enabled: true, campaignIds: true } },
     },
   });
   if (!account || account.provider !== "META" || !account.aiAssistant?.enabled) {
     return false;
+  }
+  // Limited to some campaigns: only people one of them sent a DM to.
+  const campaignIds = account.aiAssistant.campaignIds ?? [];
+  if (campaignIds.length > 0) {
+    const reached = await prisma.dmLog.findFirst({
+      where: { automationId: { in: campaignIds }, commenterId: message.senderId },
+      select: { id: true },
+    });
+    if (!reached) return false;
   }
 
   // A Meta redelivery of a message that already has a draft: its job id is

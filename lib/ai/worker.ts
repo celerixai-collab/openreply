@@ -91,6 +91,8 @@ type AssistantPromptSettings = {
   guardrails: string;
   goals: string;
   knowledge: string;
+  // Limit <campaigns> to these (the assistant's campaign scope). Empty: all.
+  campaignIds?: string[];
 };
 
 /**
@@ -115,7 +117,11 @@ export async function loadAssistantBrain(
       select: { id: true, label: true, url: true, description: true },
     }),
     prisma.automation.findMany({
-      where: { instagramAccountId: accountId, isActive: true },
+      where: {
+        instagramAccountId: accountId,
+        isActive: true,
+        ...(assistant.campaignIds?.length ? { id: { in: assistant.campaignIds } } : {}),
+      },
       select: {
         name: true,
         goal: true,
@@ -496,6 +502,7 @@ export async function processAiPlayground(
       guardrails: assistant?.guardrails ?? "",
       goals: assistant?.goals ?? "",
       knowledge: assistant?.knowledge ?? "",
+      campaignIds: assistant?.campaignIds ?? [],
     };
     const disclosureText = assistant?.disclosureText ?? DEFAULT_DISCLOSURE_TEXT;
     const brain = await loadAssistantBrain(accountId, settings);

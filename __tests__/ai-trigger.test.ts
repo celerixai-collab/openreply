@@ -6,6 +6,7 @@ const { mockPrisma, mockQueueAdd, redis } = vi.hoisted(() => {
     mockPrisma: {
       instagramAccount: { findFirst: vi.fn() },
       aiDraft: { findUnique: vi.fn() },
+      dmLog: { findFirst: vi.fn() },
     },
     mockQueueAdd: vi.fn(),
     redis: {
@@ -58,6 +59,23 @@ afterEach(() => {
 });
 
 describe("maybeEnqueueAiDraft", () => {
+  it("answers only people the chosen campaigns sent a DM to", async () => {
+    mockPrisma.instagramAccount.findFirst.mockResolvedValue({
+      ...metaAccount,
+      aiAssistant: { enabled: true, campaignIds: ["auto_a", "auto_b"] },
+    });
+    mockPrisma.dmLog.findFirst.mockResolvedValue(null);
+    expect(await maybeEnqueueAiDraft(message, Date.now())).toBe(false);
+    expect(mockPrisma.dmLog.findFirst).toHaveBeenCalledWith({
+      where: { automationId: { in: ["auto_a", "auto_b"] }, commenterId: "fan_1" },
+      select: { id: true },
+    });
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+
+    mockPrisma.dmLog.findFirst.mockResolvedValue({ id: "log_1" });
+    expect(await maybeEnqueueAiDraft({ ...message, messageId: "mid:2" }, Date.now())).toBe(true);
+  });
+
   it("queues a debounced draft job with an id derived from the account and message", async () => {
     await expect(maybeEnqueueAiDraft(message, 1000)).resolves.toBe(true);
 

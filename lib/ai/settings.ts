@@ -19,6 +19,7 @@ const AiSettingsPatch = z
       // Shares the 1000-byte message with the reply.
       .refine((value) => utf8ByteLength(value) <= 300, "Disclosure is too long")
       .optional(),
+    campaignIds: z.array(z.string().min(1).max(64)).max(50).optional(),
     dailyDraftCapPerPerson: z
       .number()
       .int()

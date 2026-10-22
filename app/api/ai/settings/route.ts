@@ -29,6 +29,7 @@ const SETTINGS_SELECT = {
   disclosureText: true,
   humanPauseHours: true,
   dailyDraftCapPerPerson: true,
+  campaignIds: true,
   updatedAt: true,
 } as const;
 
@@ -132,6 +133,18 @@ export async function PATCH(request: NextRequest) {
       { success: false, error: "The AI assistant works with accounts connected through Meta only" },
       { status: 400 }
     );
+  }
+
+  if (changes.campaignIds?.length) {
+    const owned = await prisma.automation.count({
+      where: { id: { in: changes.campaignIds }, instagramAccountId: account.id },
+    });
+    if (owned !== new Set(changes.campaignIds).size) {
+      return NextResponse.json(
+        { success: false, error: "Every campaign must belong to this account" },
+        { status: 400 }
+      );
+    }
   }
 
   const settings = await prisma.aiAssistant.upsert({
