@@ -5,6 +5,7 @@ import {
   hashClickIp,
   parseRecipientToken,
 } from "@/lib/tracking/server";
+import { withWaitlistRef } from "@/lib/tracking/waitlist-ref";
 
 type RedirectRouteProps = {
   params: Promise<{ slug: string }>;
@@ -31,6 +32,10 @@ export async function GET(request: NextRequest, { params }: RedirectRouteProps) 
     return NextResponse.redirect(new URL("/", request.url), { status: 302 });
   }
 
+  const recipientHash = parseRecipientToken(
+    new URL(request.url).searchParams.get("r")
+  );
+
   await prisma.linkClick.create({
     data: {
       workspaceId: trackedLink.workspaceId,
@@ -38,13 +43,14 @@ export async function GET(request: NextRequest, { params }: RedirectRouteProps) 
       instagramAccountId: trackedLink.automation.instagramAccountId,
       trackedLinkId: trackedLink.id,
       ipHash: hashClickIp(getRequestIp(request)),
-      recipientHash: parseRecipientToken(
-        new URL(request.url).searchParams.get("r")
-      ),
+      recipientHash,
       userAgent: request.headers.get("user-agent"),
       referrer: request.headers.get("referer"),
     },
   });
 
-  return NextResponse.redirect(trackedLink.destinationUrl, { status: 302 });
+  return NextResponse.redirect(
+    withWaitlistRef(trackedLink.destinationUrl, slug, recipientHash),
+    { status: 302 }
+  );
 }
