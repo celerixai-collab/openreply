@@ -11,7 +11,6 @@ import {
   requeueThrottledComments,
   requeueThrottledEverywhere,
 } from "@/lib/queue/requeue-throttled";
-import { backfillFollowUps } from "@/lib/queue/backfill-followups";
 import os from "node:os";
 
 const worker = createDMWorker();
@@ -28,12 +27,6 @@ const POLL_INTERVAL_MS = Number(
 
 console.log("[DM Worker] Started");
 
-void backfillFollowUps().catch((error) =>
-  console.error(
-    "[DM Worker] Backfilling follow-ups failed:",
-    error instanceof Error ? error.message : error
-  )
-);
 void requeueThrottledEverywhere().catch((error) =>
   console.error(
     "[DM Worker] Re-queueing throttled comments failed:",
