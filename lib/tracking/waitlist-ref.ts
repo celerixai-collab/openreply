@@ -30,11 +30,16 @@ export function withWaitlistRef(
 }
 
 /**
- * Salts a recipient token may have been made with: this host's secret, and
- * the default one a host without NEXTAUTH_SECRET (the DM worker) falls back to.
+ * Salts a recipient token may have been made with: this host's secret, the DM
+ * worker's NEXTAUTH_SECRET when it differs (WORKER_NEXTAUTH_SECRET), and the
+ * default one a host without NEXTAUTH_SECRET falls back to.
  */
 function candidateSalts() {
-  return [...new Set([process.env.NEXTAUTH_SECRET, DEFAULT_CLICK_SALT].filter(Boolean))] as string[];
+  return [
+    ...new Set(
+      [process.env.NEXTAUTH_SECRET, process.env.WORKER_NEXTAUTH_SECRET, DEFAULT_CLICK_SALT].filter(Boolean)
+    ),
+  ] as string[];
 }
 
 type Person = { commenterId: string; commenterName: string | null };
@@ -44,7 +49,11 @@ export function matchRecipientToken(people: Person[], token: string) {
   const salts = candidateSalts();
   for (let i = 0; i < salts.length; i++) {
     const person = people.find((p) => hashRecipientIdWith(salts[i], p.commenterId) === token);
-    if (person) return { person, salt: salts[i] === process.env.NEXTAUTH_SECRET ? "app" : "default" };
+    if (person) {
+      const salt =
+        salts[i] === process.env.NEXTAUTH_SECRET ? "app" : salts[i] === DEFAULT_CLICK_SALT ? "default" : "worker";
+      return { person, salt };
+    }
   }
   return null;
 }
@@ -134,6 +143,8 @@ export async function checkWaitlistTaps(workspaceId: string, since: Date) {
     withToken: taps.filter((t) => t.token).length,
     matchedApp: taps.filter((t) => t.matched === "app").length,
     matchedDefault: taps.filter((t) => t.matched === "default").length,
+    matchedWorker: taps.filter((t) => t.matched === "worker").length,
+    workerSecretSet: Boolean(process.env.WORKER_NEXTAUTH_SECRET),
     taps: taps.slice(0, 30),
   };
 }

@@ -98,6 +98,17 @@ describe("waitlist ref lookup", () => {
     expect(await (await who(`?s=abc123&r=${workerToken}`)).json()).toMatchObject({ username: "amy.edits" });
   });
 
+  it("matches tokens made with the worker's own secret", async () => {
+    process.env.WORKER_NEXTAUTH_SECRET = "railway-secret";
+    try {
+      mockPrisma.trackedLink.findUnique.mockResolvedValue(link(WAITLIST));
+      const workerToken = hashRecipientIdWith("railway-secret", "igsid_amy");
+      expect(await (await who(`?s=abc123&r=${workerToken}`)).json()).toMatchObject({ username: "amy.edits" });
+    } finally {
+      delete process.env.WORKER_NEXTAUTH_SECRET;
+    }
+  });
+
   it("still returns the campaign when the person is unknown or there is no token", async () => {
     mockPrisma.trackedLink.findUnique.mockResolvedValue(link(WAITLIST));
     for (const query of [`?s=abc123&r=${hashRecipientId("igsid_stranger")}`, "?s=abc123", "?s=abc123&r=short"]) {
