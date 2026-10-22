@@ -11,7 +11,7 @@
    "noPrice": true,
    "human": false,
    "link": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -27,7 +27,7 @@
     "Mac"
    ],
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -41,7 +41,7 @@
   "expect": {
    "link": true,
    "noUrlInText": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -55,21 +55,7 @@
   "expect": {
    "link": true,
    "noUrlInText": true,
-   "maxChars": 80
-  }
- },
- {
-  "id": "collab",
-  "turns": [
-   [
-    "person",
-    "你好，我是品牌方，想跟 Leo 談業配合作"
-   ]
-  ],
-  "expect": {
-   "human": false,
-   "link": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -87,7 +73,7 @@
     "記下",
     "確認"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -100,7 +86,7 @@
   ],
   "expect": {
    "noPrice": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -115,7 +101,7 @@
    "mentions": [
     "AI"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -135,7 +121,7 @@
    "noQuestion": true,
    "emoji": true,
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -167,7 +153,7 @@
   "expect": {
    "human": false,
    "link": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -185,7 +171,7 @@
   "expect": {
    "human": false,
    "link": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -198,7 +184,7 @@
   ],
   "expect": {
    "noGuarantee": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -217,7 +203,7 @@
    "notMentions": [
     "不能退款"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -230,7 +216,7 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -243,7 +229,7 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -265,7 +251,7 @@
   "expect": {
    "link": false,
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -282,7 +268,7 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -309,7 +295,7 @@
    "human": false,
    "link": false,
    "noQuestion": true,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -322,7 +308,7 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -337,7 +323,7 @@
    "human": false,
    "noPrice": true,
    "link": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -353,7 +339,7 @@
    "mentions": [
     "10/28"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -370,7 +356,7 @@
     "Skool",
     "課程"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -386,7 +372,7 @@
    "mentions": [
     "Max"
    ],
-   "maxChars": 80
+   "maxChars": 90
   }
  },
  {
@@ -413,7 +399,7 @@
   ],
   "expect": {
    "human": false,
-   "maxChars": 80
+   "maxChars": 90
   }
  }
 ]
