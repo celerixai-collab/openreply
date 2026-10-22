@@ -715,13 +715,13 @@ describe("second brain: links, gaps and the playground", () => {
 
   it("records a question the knowledge does not answer", async () => {
     create = vi.fn(async () =>
-      claudeReply({ knowledge_gap: true, gap_question: "有沒有英文版？", needs_human: true, handoff_reason: "知識庫沒有" })
+      claudeReply({ knowledge_gap: true, gap_question: "有沒有英文版？" })
     );
     seedBurst(["mid_2", "有英文版嗎"]);
 
     await processAiDraft(job("mid_2"), deps());
 
-    expect(h.drafts[0]).toMatchObject({ knowledgeGap: true, gapQuestion: "有沒有英文版？", needsHuman: true });
+    expect(h.drafts[0]).toMatchObject({ knowledgeGap: true, gapQuestion: "有沒有英文版？", needsHuman: false });
   });
 
   it("sends a reply with a link as a button message", async () => {

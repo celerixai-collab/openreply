@@ -181,9 +181,13 @@ describe("finalizeDraft", () => {
     expect(later.replyText.length).toBeGreaterThan(first.replyText.length);
   });
 
-  it("forces a hand-off for business, complaints, spam and low confidence", () => {
-    for (const intent of ["collab_or_business", "complaint_or_refund", "spam_or_abuse"] as const) {
-      expect(finalizeDraft({ ...base, intent }, { disclosureText: "", firstReply: false }).needsHuman).toBe(true);
+  it("forces a hand-off only for spam and low confidence", () => {
+    expect(
+      finalizeDraft({ ...base, intent: "spam_or_abuse" }, { disclosureText: "", firstReply: false }).needsHuman
+    ).toBe(true);
+    // Refunds, complaints and collaborations are answered per the creator's guardrails.
+    for (const intent of ["collab_or_business", "complaint_or_refund"] as const) {
+      expect(finalizeDraft({ ...base, intent }, { disclosureText: "", firstReply: false }).needsHuman).toBe(false);
     }
     expect(
       finalizeDraft({ ...base, confidence: "low" }, { disclosureText: "", firstReply: false }).needsHuman
@@ -290,13 +294,13 @@ describe("links and gaps", () => {
     expect([...`（AI）\n${draft.replyText}`].length).toBeLessThanOrEqual(640);
   });
 
-  it("sends a question the knowledge cannot answer to the creator", () => {
+  it("records a question the knowledge cannot answer and still sends the holding reply", () => {
     const draft = finalizeDraft(
       { ...base, linkId: null, knowledgeGap: true, gapQuestion: "有沒有英文版？" },
       { disclosureText: "", firstReply: false }
     );
-    expect(draft).toMatchObject({ needsHuman: true, gapQuestion: "有沒有英文版？" });
-    expect(draft.handoffReason).toBeTruthy();
+    expect(draft).toMatchObject({ needsHuman: false, knowledgeGap: true, gapQuestion: "有沒有英文版？" });
+    expect(draft.handoffReason).toBeNull();
   });
 
   it("puts knowledge entries and links into the cached system prompt", () => {

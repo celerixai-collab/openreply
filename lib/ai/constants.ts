@@ -47,12 +47,10 @@ export const AI_INTENTS = [
 ] as const;
 export type AiIntent = (typeof AI_INTENTS)[number];
 
-// Intents that always go to a person, whatever the model says.
-export const HANDOFF_INTENTS: readonly AiIntent[] = [
-  "collab_or_business",
-  "complaint_or_refund",
-  "spam_or_abuse",
-];
+// Intents that always go to a person, whatever the model says. Refunds,
+// complaints and collaborations are handled by the assistant per the
+// creator's guardrails.
+export const HANDOFF_INTENTS: readonly AiIntent[] = ["spam_or_abuse"];
 
 export const AI_CONFIDENCE = ["high", "medium", "low"] as const;
 export type AiConfidence = (typeof AI_CONFIDENCE)[number];

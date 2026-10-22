@@ -260,7 +260,6 @@ export function finalizeDraft(
     draft.needsHuman ||
     HANDOFF_INTENTS.includes(draft.intent) ||
     draft.confidence === "low" ||
-    draft.knowledgeGap ||
     strayLinks.length > 0 ||
     badLinkId;
   const reserved = utf8ByteLength(composeOutgoingText("", disclosureText, firstReply));
@@ -280,9 +279,7 @@ export function finalizeDraft(
       ? (draft.handoffReason ??
         (strayLinks.length || badLinkId
           ? "回覆裡有大腦資料以外的連結，請確認"
-          : draft.knowledgeGap
-            ? "知識庫沒有這個問題的答案"
-            : null))
+          : null))
       : null,
   };
 }
