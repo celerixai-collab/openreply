@@ -20,6 +20,10 @@ const AiSettingsPatch = z
       .refine((value) => utf8ByteLength(value) <= 300, "Disclosure is too long")
       .optional(),
     campaignIds: z.array(z.string().min(1).max(64)).max(50).optional(),
+    testUsernames: z
+      .array(z.string().transform((value) => value.trim().replace(/^@/, "").toLowerCase()).pipe(z.string().regex(/^[a-z0-9._]{1,30}$/)))
+      .max(20)
+      .optional(),
     dailyDraftCapPerPerson: z
       .number()
       .int()

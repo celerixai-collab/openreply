@@ -7,6 +7,7 @@ const { mockPrisma, mockQueueAdd, redis } = vi.hoisted(() => {
       instagramAccount: { findFirst: vi.fn() },
       aiDraft: { findUnique: vi.fn() },
       dmLog: { findFirst: vi.fn() },
+      contact: { findFirst: vi.fn() },
     },
     mockQueueAdd: vi.fn(),
     redis: {
@@ -59,6 +60,19 @@ afterEach(() => {
 });
 
 describe("maybeEnqueueAiDraft", () => {
+  it("answers only the test usernames while a test list is set", async () => {
+    mockPrisma.instagramAccount.findFirst.mockResolvedValue({
+      ...metaAccount,
+      aiAssistant: { enabled: true, campaignIds: [], testUsernames: ["leo.test"] },
+    });
+    mockPrisma.contact.findFirst.mockResolvedValue({ username: "someone_else" });
+    expect(await maybeEnqueueAiDraft(message, Date.now())).toBe(false);
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+
+    mockPrisma.contact.findFirst.mockResolvedValue({ username: "@Leo.Test" });
+    expect(await maybeEnqueueAiDraft({ ...message, messageId: "mid:9" }, Date.now())).toBe(true);
+  });
+
   it("answers only people the chosen campaigns sent a DM to", async () => {
     mockPrisma.instagramAccount.findFirst.mockResolvedValue({
       ...metaAccount,

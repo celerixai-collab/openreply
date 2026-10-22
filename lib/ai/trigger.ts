@@ -74,11 +74,21 @@ export async function maybeEnqueueAiDraft(
     select: {
       id: true,
       provider: true,
-      aiAssistant: { select: { enabled: true, campaignIds: true } },
+      aiAssistant: { select: { enabled: true, campaignIds: true, testUsernames: true } },
     },
   });
   if (!account || account.provider !== "META" || !account.aiAssistant?.enabled) {
     return false;
+  }
+  // A test run: only the listed usernames get replies.
+  const testUsernames = account.aiAssistant.testUsernames ?? [];
+  if (testUsernames.length > 0) {
+    const contact = await prisma.contact.findFirst({
+      where: { instagramAccountId: account.id, igsid: message.senderId },
+      select: { username: true },
+    });
+    const username = contact?.username?.replace(/^@/, "").toLowerCase();
+    if (!username || !testUsernames.includes(username)) return false;
   }
   // Limited to some campaigns: only people one of them sent a DM to.
   const campaignIds = account.aiAssistant.campaignIds ?? [];

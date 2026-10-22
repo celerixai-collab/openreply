@@ -30,6 +30,7 @@ const SETTINGS_SELECT = {
   humanPauseHours: true,
   dailyDraftCapPerPerson: true,
   campaignIds: true,
+  testUsernames: true,
   updatedAt: true,
 } as const;
 
