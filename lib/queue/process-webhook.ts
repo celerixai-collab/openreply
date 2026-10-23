@@ -165,7 +165,11 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
     );
 
     for (const event of readEvents) {
+      // Only the latest opening DM: reading the chat must not also send the
+      // links of older campaigns the person never tapped.
       const openingLogs = await prisma.dmLog.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 1,
         where: {
           commenterId: event.userId,
           status: "SENT",

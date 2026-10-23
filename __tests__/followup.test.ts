@@ -38,12 +38,12 @@ beforeEach(() => {
 });
 
 describe("scheduleFollowUp", () => {
-  it("schedules one follow-up per person per campaign after the delay", async () => {
+  it("schedules one follow-up per person per account after the delay", async () => {
     expect(await scheduleFollowUp(campaign, "fan_1", "fan")).toBe("scheduled");
     expect(mockQueue.add).toHaveBeenCalledWith(
       "process-followup",
       expect.objectContaining({ userId: "fan_1", automationId: "auto_a" }),
-      { delay: 60 * 60_000, jobId: "followup_auto_a_fan_1" }
+      { delay: 60 * 60_000, jobId: "followup_acct_1_fan_1" }
     );
   });
 

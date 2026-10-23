@@ -8,6 +8,8 @@ import { FOLLOWUP_JOB_NAME, getDMQueue } from "@/lib/queue/client";
  * the account write again after the person tapped or messaged (the 24-hour
  * window), so it is scheduled on a button tap and on any message they send,
  * and each new message pushes it back to that much after their latest one.
+ * One per person per account: someone who commented on two campaigns gets
+ * the follow-up of the first one scheduled, not both.
  */
 
 type FollowUpCampaign = {
@@ -19,8 +21,8 @@ type FollowUpCampaign = {
   instagramAccount: { instagramId: string };
 };
 
-export function followUpJobId(automationId: string, userId: string) {
-  return `followup_${automationId}_${userId}`;
+export function followUpJobId(accountId: string, userId: string) {
+  return `followup_${accountId}_${userId}`;
 }
 
 /** Best-effort: a scheduling failure must never fail the send it follows. */
@@ -48,11 +50,11 @@ async function scheduleFollowUpOrThrow(
   if (!automation.followUpEnabled || !automation.followUpMessage?.trim()) return "skipped";
   const delay = Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000;
   const queue = getDMQueue();
-  const jobId = followUpJobId(automation.id, userId);
+  const jobId = followUpJobId(automation.instagramAccountId, userId);
 
   const existing = await queue.getJob(jobId);
   if (existing) {
-    // Already sent (or being sent): one follow-up per person per campaign.
+    // Already sent (or being sent): one follow-up per person.
     if ((await existing.getState()) !== "delayed") return "skipped";
     await existing.changeDelay(delay);
     return "rescheduled";

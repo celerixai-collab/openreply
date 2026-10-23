@@ -2499,7 +2499,7 @@ describe("DM Worker — email gate", () => {
       expect(mockQueueAdd).toHaveBeenCalledWith(
         "process-followup",
         expect.objectContaining({ userId: "commenter_999", automationId: "auto_789" }),
-        expect.objectContaining({ delay: 5 * 60_000, jobId: "followup_auto_789_commenter_999" })
+        expect.objectContaining({ delay: 5 * 60_000, jobId: "followup_ig_account_row_1_commenter_999" })
       );
     });
 
