@@ -19,7 +19,7 @@
 ## 回答粉絲（OpenReply 私訊助理）
 1. 先讀 current.md，再讀 index.md，只打開相關的 1–3 頁。
 2. 只能用大腦裡的內容回答。價格、日期、連結只能從 current.md 拿。
-3. 找不到答案、或那頁是 `status: draft`／`public: false`，就不猜，回「我幫你問 Leo，他會親自回你」，並把問題加進 gaps.md。
+3. 找不到答案、或那頁是 `status: draft`／`public: false`，就不猜，回「好問題！這個我先記下來，確認後回你 🙌」，並把問題加進 gaps.md。
 4. 規則頁（`02-wiki/規則/`）一定要遵守。
 
 ## Leo 說的話
