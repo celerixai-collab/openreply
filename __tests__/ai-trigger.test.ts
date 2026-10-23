@@ -90,6 +90,18 @@ describe("maybeEnqueueAiDraft", () => {
     expect(await maybeEnqueueAiDraft({ ...message, messageId: "mid:2" }, Date.now())).toBe(true);
   });
 
+  it("answers a shared reel or photo with a line describing it", async () => {
+    await expect(
+      maybeEnqueueAiDraft({ ...message, messageText: "", attachmentType: "ig_reel" }, 1000)
+    ).resolves.toBe(true);
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "ai-draft",
+      expect.objectContaining({ messageText: "（對方分享了一支 Reels，沒有附文字）" }),
+      expect.anything()
+    );
+    expect(await maybeEnqueueAiDraft({ ...message, messageId: "mid:3", messageText: "" }, 1000)).toBe(false);
+  });
+
   it("queues a debounced draft job with an id derived from the account and message", async () => {
     await expect(maybeEnqueueAiDraft(message, 1000)).resolves.toBe(true);
 

@@ -56,6 +56,26 @@ export async function clearBurstThrough(
   await getRedisConnection().ltrim(burstKey(accountId, igsid), index + 1, -1);
 }
 
+const ATTACHMENT_LABELS: Record<string, string> = {
+  share: "分享了一則貼文或 Reels",
+  ig_reel: "分享了一支 Reels",
+  reel: "分享了一支 Reels",
+  ig_post: "分享了一則貼文",
+  image: "傳了一張圖片",
+  video: "傳了一段影片",
+  audio: "傳了一段語音",
+  file: "傳了一個檔案",
+  story_mention: "在限時動態提到你",
+  story_reply: "回覆了你的限時動態",
+  like_heart: "傳了一個愛心",
+};
+
+/** What a message without text was, as a line the AI can answer. */
+export function describeAttachment(type: string | undefined): string {
+  if (!type) return "";
+  return `（對方${ATTACHMENT_LABELS[type] ?? "傳了一個附件"}，沒有附文字）`;
+}
+
 export async function maybeEnqueueAiDraft(
   message: ProcessMessageJob,
   receivedAt: number
@@ -63,7 +83,7 @@ export async function maybeEnqueueAiDraft(
   // Cheapest checks first: without a key on this worker nothing else runs.
   if (!isAiConfigured()) return false;
   if (message.fromQuickReply) return false;
-  const text = message.messageText?.trim();
+  const text = message.messageText?.trim() || describeAttachment(message.attachmentType);
   if (!text) return false;
 
   const account = await prisma.instagramAccount.findFirst({

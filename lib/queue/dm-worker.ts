@@ -1536,6 +1536,18 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
 
+  // A shared reel, photo or voice note: no words for a campaign or the email
+  // gate to match, so only the AI assistant may answer it.
+  if (!messageText.trim()) {
+    if (!job.data.attachmentType) return;
+    try {
+      await maybeEnqueueAiDraft(job.data, job.timestamp ?? Date.now());
+    } catch (error) {
+      console.error("[DM Worker] Could not queue an AI draft:", formatError(error));
+    }
+    return;
+  }
+
   const automations = await prisma.automation.findMany({
     where: {
       ...connectionScope(job.data),

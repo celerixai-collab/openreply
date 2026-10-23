@@ -98,6 +98,8 @@ export interface WebhookMessageEvent {
   senderId: string;
   // Set only when the message came from tapping a quick reply.
   fromQuickReply?: boolean;
+  // Set only for a message with no text: what was sent instead (share, image…).
+  attachmentType?: string;
 }
 
 // A message the connected account sent (an echo): OpenReply's own sends and
@@ -241,16 +243,25 @@ export function parseMessageEvents(
       const senderId = messaging.sender?.id;
       const accountId = entry.id ?? messaging.recipient?.id;
 
-      if (!text || !messageId || !senderId || !accountId) continue;
+      // A shared reel, photo or voice note has no text; only the AI assistant
+      // answers those (campaigns and the email gate need words to match).
+      const attachmentType = text
+        ? undefined
+        : message.attachments?.length
+          ? message.attachments[0]?.type || "attachment"
+          : undefined;
+
+      if ((!text && !attachmentType) || !messageId || !senderId || !accountId) continue;
       // Ignore anything the connected account sent to itself.
       if (senderId === accountId) continue;
 
       events.push({
         instagramAccountId: accountId,
         messageId,
-        messageText: text,
+        messageText: text ?? "",
         senderId,
         ...(message.quick_reply ? { fromQuickReply: true } : {}),
+        ...(attachmentType ? { attachmentType } : {}),
       });
     }
   }

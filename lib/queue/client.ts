@@ -81,6 +81,8 @@ export interface ProcessMessageJob {
   // The message came from tapping a quick reply (the email gate's one-tap
   // email button), not from typing.
   fromQuickReply?: boolean;
+  // A message with no text: what was sent instead (share, image…).
+  attachmentType?: string;
 }
 
 export type DmQueueJob =

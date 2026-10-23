@@ -464,12 +464,32 @@ describe("parseMessageEvents", () => {
     ).toHaveLength(0);
   });
 
-  it("should ignore attachment-only messages with no text", () => {
+  it("should keep attachment-only messages, with empty text and the attachment type", () => {
     const payload = messagingPayload([
       {
         sender: { id: "user_999" },
         recipient: { id: "ig_456" },
-        message: { mid: "mid_abc", attachments: [{ type: "image" }] },
+        message: { mid: "mid_abc", attachments: [{ type: "ig_reel" }] },
+      },
+    ]);
+
+    expect(parseMessageEvents(payload)).toEqual([
+      {
+        instagramAccountId: "ig_456",
+        messageId: "mid_abc",
+        messageText: "",
+        senderId: "user_999",
+        attachmentType: "ig_reel",
+      },
+    ]);
+  });
+
+  it("should ignore messages with neither text nor attachments", () => {
+    const payload = messagingPayload([
+      {
+        sender: { id: "user_999" },
+        recipient: { id: "ig_456" },
+        message: { mid: "mid_abc" },
       },
     ]);
 
