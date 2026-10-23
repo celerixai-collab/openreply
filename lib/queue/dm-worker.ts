@@ -85,6 +85,11 @@ import {
 
 import { ZernioApiError } from "@/lib/zernio/client";
 import { maybeEnqueueAiDraft } from "@/lib/ai/trigger";
+import {
+  followUpBlockedReason,
+  scheduleFollowUp,
+  scheduleFollowUpAfterMessage,
+} from "@/lib/queue/followup";
 
 const BACKOFF_DELAYS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000];
 
@@ -1136,24 +1141,7 @@ async function deliverReveal({
     // short thank-you. It is scheduled as its own delayed job so it can go out
     // some minutes later (followUpDelayMinutes) rather than immediately. The
     // deterministic job id dedupes repeat button taps to one follow-up per user.
-    if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
-      const delayMs =
-        Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000;
-      await getDMQueue().add(
-        FOLLOWUP_JOB_NAME,
-        {
-          instagramAccountId: automation.instagramAccount.instagramId,
-          accountConnectionId: automation.instagramAccountId,
-          userId,
-          automationId: automation.id,
-          commenterName,
-        },
-        {
-          delay: delayMs,
-          jobId: `followup_${automation.id}_${userId}`,
-        },
-      );
-    }
+    await scheduleFollowUp(automation, userId, commenterName);
     await prisma.dmLog.upsert({
       where: {
         automationId_commentId: {
@@ -1496,6 +1484,12 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
     return;
   }
 
+  const blocked = await followUpBlockedReason(automation.id, automation.instagramAccountId, userId);
+  if (blocked) {
+    console.log(`[DM Worker] Follow-up skipped for campaign ${automation.id}: ${blocked}`);
+    return;
+  }
+
   let accessToken: InstagramContext;
   try {
     accessToken = await createInstagramContext(
@@ -1534,6 +1528,17 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  * An open email gate sees the message first (see handleEmailGateReply).
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
+  await answerMessage(job);
+  // Any message opens Instagram's 24-hour window: the campaign follow-up goes
+  // out once the conversation has been quiet for its delay.
+  try {
+    await scheduleFollowUpAfterMessage(job.data.instagramAccountId, job.data.senderId);
+  } catch (error) {
+    console.error("[DM Worker] Could not schedule a follow-up:", formatError(error));
+  }
+}
+
+async function answerMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
 
   // A shared reel, photo or voice note: no words for a campaign or the email
@@ -1836,22 +1841,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         // The link has been delivered, so the appreciation follow-up applies
         // here exactly as it does after a button tap. Not scheduled behind the
         // follow prompt — no link went out yet in that branch.
-        if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
-          await getDMQueue().add(
-            FOLLOWUP_JOB_NAME,
-            {
-              instagramAccountId: automation.instagramAccount.instagramId,
-              accountConnectionId: automation.instagramAccountId,
-              userId: senderId,
-              automationId: automation.id,
-              commenterName,
-            },
-            {
-              delay: Math.max(0, automation.followUpDelayMinutes ?? 0) * 60_000,
-              jobId: `followup_${automation.id}_${senderId}`,
-            }
-          );
-        }
+        await scheduleFollowUp(automation, senderId, commenterName);
       }
 
       await prisma.dmLog.upsert({

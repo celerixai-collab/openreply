@@ -145,6 +145,7 @@ vi.mock("@/lib/ops/worker-health", () => ({
 vi.mock("@/lib/queue/client", () => ({
   getDMQueue: () => ({
     add: mockQueueAdd,
+    getJob: vi.fn(async () => undefined),
   }),
   getRedisConnection: vi.fn(),
   POSTBACK_JOB_NAME: "process-postback",

@@ -42,6 +42,10 @@ export const AI_INTENTS = [
   "link_request",
   "collab_or_business",
   "complaint_or_refund",
+  // The person says they already joined, or turns the offer down: the
+  // campaign follow-up skips them (see lib/queue/followup.ts).
+  "already_joined",
+  "declined",
   "spam_or_abuse",
   "other",
 ] as const;

@@ -78,7 +78,7 @@ Handle the conversation yourself, following <guardrails> and <goals>: that inclu
 
 ## Output
 - reply_text: the reply to send.
-- intent: one of ${AI_INTENTS.join(", ")}.
+- intent: one of ${AI_INTENTS.join(", ")}. Use already_joined when they say they already signed up or joined, and declined when they turn the offer down.
 - needs_human: whether the creator should answer personally.
 - handoff_reason: one short sentence when needs_human is true, otherwise null.
 - language: the language of reply_text as a BCP 47 tag, such as zh-TW, en or ja.
