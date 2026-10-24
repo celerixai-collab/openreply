@@ -85,6 +85,7 @@ import {
 
 import { ZernioApiError } from "@/lib/zernio/client";
 import { maybeEnqueueAiDraft } from "@/lib/ai/trigger";
+import { refreshContactProfile } from "@/lib/contacts/profile";
 import {
   followUpBlockedReason,
   scheduleFollowUp,
@@ -1459,6 +1460,11 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     context: "postback",
     fallback: Boolean(fallback),
   });
+  // A tap opens the conversation, so Instagram now answers a profile lookup:
+  // keep the person's follower count on their contact.
+  if (!fallback) {
+    await refreshContactProfile(accessToken, automation.instagramAccountId, userId);
+  }
 }
 
 /**
