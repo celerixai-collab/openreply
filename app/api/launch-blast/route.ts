@@ -21,6 +21,8 @@ import { getRedisConnection } from "@/lib/queue/client";
  */
 const CAMPAIGN_NAME = /^剪輯室 早鳥等候 [A-F]$/;
 const SENT_KEY = "launch-blast:2026-10-28:sent";
+// People Instagram refused because their last interaction is too old; skipped from now on.
+const CLOSED_KEY = "launch-blast:2026-10-28:closed";
 
 const bodySchema = z.object({
   text: z.string().min(1).max(600),
@@ -75,6 +77,7 @@ export async function POST(request: NextRequest) {
 
   const redis = getRedisConnection();
   const alreadySent = new Set(await redis.smembers(SENT_KEY));
+  const closed = new Set(await redis.smembers(CLOSED_KEY));
 
   let targetIgsids: Set<string> | null = null;
   if (usernames?.length) {
@@ -94,6 +97,7 @@ export async function POST(request: NextRequest) {
   const pending = people.filter(
     (p) =>
       !alreadySent.has(p.commenterId) &&
+      (!closed.has(p.commenterId) || Boolean(usernames?.length)) &&
       (!targetIgsids || targetIgsids.has(p.commenterId))
   );
   const batch = pending.slice(0, limit);
@@ -102,6 +106,7 @@ export async function POST(request: NextRequest) {
     campaigns: campaigns.length,
     uniquePeople: people.length,
     alreadySent: alreadySent.size,
+    closed: closed.size,
     pendingBefore: pending.length,
   };
   if (dryRun) {
@@ -136,6 +141,9 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failed.push({ user: label, error: message.slice(0, 200) });
+      if (/outside of allowed window|sub=2534022/i.test(message)) {
+        await redis.sadd(CLOSED_KEY, person.commenterId);
+      }
       if (isInstagramThrottle(error) && ++throttled >= 3) break;
     }
     await sleep(1500);
