@@ -194,7 +194,7 @@ export async function POST(request: NextRequest) {
         instagramAccountId: account.instagramId,
         userId: person.commenterId,
         text,
-        buttons: [{ title: buttonTitle, url }],
+        buttons: [{ title: buttonTitle, url: url as string }],
       });
       await redis.sadd(SENT_KEY, person.commenterId);
       sent.push(label);
