@@ -84,7 +84,11 @@ export async function POST(request: NextRequest) {
 
   // One row per person per account, the most recent comment first.
   const people = await prisma.dmLog.findMany({
-    where: { automationId: { in: campaigns.map((c) => c.id) } },
+    where: {
+      automationId: { in: campaigns.map((c) => c.id) },
+      // Button taps are logged under a made-up "reveal:" id; only real comments take a reply.
+      ...(mode === "reply" ? { NOT: { commentId: { startsWith: "reveal:" } } } : {}),
+    },
     distinct: ["instagramAccountId", "commenterId"],
     orderBy: { createdAt: "desc" },
     select: {
