@@ -4,10 +4,13 @@ import {
   hasLegacyUnconfirmedDelivery,
   isConfirmedSendRejection,
   isDeliveryUnconfirmed,
+  isPermanentRejection,
 } from "@/lib/instagram/delivery-errors";
 import {
   claimCommentDelivery,
   MAX_COMMENT_SEND_ATTEMPTS,
+  PUBLIC_REPLY_GAVE_UP_MARK,
+  publicReplyGaveUp,
   SCHEDULED_RETRY_MARK,
 } from "./comment-delivery";
 import { createHash } from "node:crypto";
@@ -400,7 +403,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     if (existingLog?.status === "SKIPPED_PLAN_LIMIT") continue;
     if (
       !needsDm &&
-      (alreadyPublicReplied || existingLog?.publicReplyDeliveryUnconfirmed || !automation.publicReplyEnabled)
+      (alreadyPublicReplied || existingLog?.publicReplyDeliveryUnconfirmed ||
+        publicReplyGaveUp(existingLog?.publicReplyError) || !automation.publicReplyEnabled)
     ) {
       continue;
     }
@@ -512,7 +516,8 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       automation.publicReplyEnabled &&
       replyPool.length > 0 &&
       !existingLog?.publicReplySentAt &&
-      !existingLog?.publicReplyDeliveryUnconfirmed;
+      !existingLog?.publicReplyDeliveryUnconfirmed &&
+      !publicReplyGaveUp(existingLog?.publicReplyError);
     if (!owed) return;
     // Paced, and paused after a spam-limit refusal. One held back is queued
     // again a few minutes out, so the sweep's batch spreads over the minutes
@@ -566,7 +571,11 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
                 commentId,
               },
             },
-            data: { publicReplyError: formatError(classifySendError(error)), publicReplyDeliveryUnconfirmed: !isConfirmedSendRejection(error) },
+            data: {
+              // A deleted comment or a vanished account never takes a reply.
+              publicReplyError: `${isPermanentRejection(error) ? `${PUBLIC_REPLY_GAVE_UP_MARK} ` : ""}${formatError(classifySendError(error))}`.slice(0, 1000),
+              publicReplyDeliveryUnconfirmed: !isConfirmedSendRejection(error),
+            },
           })
           .catch(() => {});
       }
@@ -951,6 +960,20 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         console.warn(
           `[DM Worker] Instagram throttled a private reply; retry ${throttleRetry + 1} in ${Math.round(delay / 60_000)} min${tripped ? " (account cooling down)" : ""}`
         );
+        continue;
+      }
+      // Window closed, person gone, comment deleted: final. Use up the attempts
+      // so the reconciler stops re-queueing it, and don't let BullMQ retry it.
+      if (!delivered && isPermanentRejection(sendError)) {
+        await prisma.dmLog.update({
+          where: { automationId_commentId: { automationId: automation.id, commentId } },
+          data: {
+            status: "FAILED",
+            attempts: MAX_COMMENT_SEND_ATTEMPTS,
+            errorMessage: formatError(sendError),
+            dmDeliveryUnconfirmed: false,
+          },
+        });
         continue;
       }
       await prisma.dmLog.update({

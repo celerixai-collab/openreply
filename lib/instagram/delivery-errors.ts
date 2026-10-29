@@ -56,6 +56,22 @@ export function isInstagramThrottle(error: unknown): boolean {
   );
 }
 
+/**
+ * Rejections that no retry will ever fix: the messaging window closed (code 10,
+ * subcode 2534022), the person is gone or blocked the account (code 100,
+ * subcode 2534014; code 551), or the comment was deleted (code 100, subcode
+ * 33). Retrying these only spends calls Instagram counts against the account,
+ * which is what tips it into throttling everyone else (2026-10-29).
+ */
+export function isPermanentRejection(error: unknown): boolean {
+  if (!(error instanceof MetaApiError) || isInstagramThrottle(error)) return false;
+  if (error.code === 551) return true;
+  if ([2534022, 2534014, 33].includes(error.subcode ?? -1)) return true;
+  return /outside of allowed window|requested user cannot be found|invalid for a private reply|Object with ID '?\w+'? does not exist/i.test(
+    error.message,
+  );
+}
+
 export function classifySendError(error: unknown): unknown {
   return isDeliveryUnconfirmed(error) || isConfirmedSendRejection(error)
     ? error

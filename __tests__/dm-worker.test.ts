@@ -1074,10 +1074,10 @@ describe("DM Worker — one private reply per comment", () => {
       new MetaApiError(100, undefined, undefined, "The comment is invalid for a private reply")
     );
 
+    // A final rejection: recorded as FAILED with its attempts used up, and the
+    // job completes so neither BullMQ nor the sweep retries it.
     const processor = getProcessor();
-    await expect(processor(createMockJob())).rejects.toThrow(
-      "The comment is invalid for a private reply"
-    );
+    await expect(processor(createMockJob())).resolves.toBeUndefined();
 
     // The reserved rate slot must be handed back when the send fails, so a
     // comment that never delivered a DM does not burn slots on each retry.

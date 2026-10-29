@@ -25,7 +25,7 @@
  * filter on the account to widen results.
  */
 
-import { MAX_COMMENT_SEND_ATTEMPTS, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { MAX_COMMENT_SEND_ATTEMPTS, publicReplyGaveUp, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 import { hasLegacyUnconfirmedDelivery } from "@/lib/instagram/delivery-errors";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
@@ -352,7 +352,7 @@ async function sweepCampaign({
       select: {
         commentId: true, status: true, attempts: true, errorMessage: true, updatedAt: true,
         dmDeliveryUnconfirmed: true, publicReplySentAt: true,
-        publicReplyDeliveryUnconfirmed: true,
+        publicReplyDeliveryUnconfirmed: true, publicReplyError: true,
       },
     });
     const handledSet = new Set(logs.filter((log) => {
@@ -365,7 +365,8 @@ async function sweepCampaign({
         hasScheduledRetry(log) ||
         (log.status === "FAILED" && hasLegacyUnconfirmedDelivery(log.errorMessage));
       const replyStopped = !automation.publicReplyEnabled ||
-        log.publicReplySentAt || log.publicReplyDeliveryUnconfirmed;
+        log.publicReplySentAt || log.publicReplyDeliveryUnconfirmed ||
+        publicReplyGaveUp(log.publicReplyError);
       return dmStopped && replyStopped;
     }).map((log) => log.commentId));
 
