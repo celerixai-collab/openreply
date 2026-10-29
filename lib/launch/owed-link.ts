@@ -18,6 +18,8 @@ import { CAMPAIGN_NAME, SENT_KEY } from "@/lib/launch/launch-drip";
  * on any post, a DM, a story reply) and goes out then, once per person.
  */
 export const OWED_KEY = "launch-blast:owed";
+// Test accounts that are treated as owed even if they never commented on A–F.
+export const OWED_TEST_KEY = "launch-blast:owed:test";
 
 type OwedSettings = {
   enabled: boolean;
@@ -94,10 +96,11 @@ export async function deliverOwedLaunchLink({
       where: { instagramId: instagramAccountId },
     });
     if (!account || !hasInstagramCredentials(account) || userId === account.instagramId) return;
-    if (!(await isOwedLaunchLink(account.id, userId, settings.launchAt))) return;
+    const redis = getRedisConnection();
+    const isTest = (await redis.sismember(OWED_TEST_KEY, userId)) === 1;
+    if (!isTest && !(await isOwedLaunchLink(account.id, userId, settings.launchAt))) return;
 
     // Claim first, so two events at once cannot both send.
-    const redis = getRedisConnection();
     if ((await redis.sadd(SENT_KEY, userId)) !== 1) return;
 
     const buttons = [{ title: settings.buttonTitle || "購買教學", url: settings.url }];

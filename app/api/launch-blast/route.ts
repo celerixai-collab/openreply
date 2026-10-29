@@ -25,7 +25,7 @@ import {
   getDripSettings,
   setDripSettings,
 } from "@/lib/launch/launch-drip";
-import { getOwedSettings, setOwedSettings } from "@/lib/launch/owed-link";
+import { getOwedSettings, OWED_TEST_KEY, setOwedSettings } from "@/lib/launch/owed-link";
 
 /**
  * One-off launch announcement to everyone who ever commented on a
@@ -136,10 +136,25 @@ export async function POST(request: NextRequest) {
         launchAt: nextLaunchAt ?? new Date(),
       });
     }
+    // Test accounts: treated as owed on their next interaction, once per call.
+    let testPeople: string[] | undefined;
+    if (usernames?.length) {
+      const wanted = usernames.map((u) => u.replace(/^@/, "").toLowerCase());
+      const contacts = await prisma.contact.findMany({
+        where: { workspaceId, username: { in: wanted, mode: "insensitive" } },
+        select: { igsid: true, username: true },
+      });
+      for (const c of contacts) {
+        await redis.sadd(OWED_TEST_KEY, c.igsid);
+        await redis.srem(SENT_KEY, c.igsid);
+      }
+      testPeople = contacts.map((c) => c.username ?? c.igsid);
+    }
     const now = await getOwedSettings();
     return NextResponse.json({
       success: true,
       data: {
+        testPeople,
         enabled: now.enabled,
         text: now.text,
         buttonTitle: now.buttonTitle,
