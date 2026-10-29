@@ -282,6 +282,23 @@ describe("links and gaps", () => {
     expect(draft).toMatchObject({ linkId: "link_1", needsHuman: false });
   });
 
+  it("attaches the one link when the reply says it is below but the model sent no button", () => {
+    const draft = finalizeDraft(
+      { ...base, replyText: "購買教學點下面看看就好", linkId: null },
+      { disclosureText: "", firstReply: false, linkIds: ["link_1"] }
+    );
+    expect(draft.linkId).toBe("link_1");
+    expect(draft.needsHuman).toBe(false);
+  });
+
+  it("does not add a button when the reply does not point to one", () => {
+    const draft = finalizeDraft(
+      { ...base, replyText: "目前只支援 Mac 喔", linkId: null },
+      { disclosureText: "", firstReply: false, linkIds: ["link_1"] }
+    );
+    expect(draft.linkId).toBeNull();
+  });
+
   it("drops a made-up link id and hands the draft to the creator", () => {
     const draft = finalizeDraft({ ...base, linkId: "invented" }, { disclosureText: "", firstReply: false, linkIds: ["link_1"] });
     expect(draft.linkId).toBeNull();

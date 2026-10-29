@@ -294,7 +294,12 @@ export function finalizeDraft(
   const strayLinks = unknownLinks(draft.replyText, knowledge);
   // A link id the model made up is dropped, and the draft goes to a person.
   const badLinkId = Boolean(draft.linkId) && !linkIds.includes(draft.linkId!);
-  const linkId = badLinkId ? null : draft.linkId;
+  // "連結在下面" with no button leaves them nothing to tap: with one link to
+  // send, it goes along.
+  const pointsBelow = /(在|點|按)下面|下面的|下方|below/i.test(draft.replyText);
+  const linkId = badLinkId
+    ? null
+    : (draft.linkId ?? (pointsBelow && linkIds.length === 1 ? linkIds[0] : null));
   const needsHuman =
     draft.needsHuman ||
     HANDOFF_INTENTS.includes(draft.intent) ||
