@@ -146,6 +146,39 @@ export function classifyAnthropicError(error: unknown): AiGenerationError {
   );
 }
 
+const HAN = /\p{Script=Han}/u;
+
+/**
+ * The model sometimes answers an English message in Chinese when the
+ * creator's knowledge is all Chinese. Code checks it: English in, no Chinese
+ * characters out, or the reply is written again.
+ */
+export function wroteInEnglish(texts: string[]): boolean {
+  const text = texts.join(" ");
+  return /[a-z]{2,}/i.test(text) && !HAN.test(text);
+}
+
+/** Draft a reply, and write it again in English if they wrote in English but it came back in Chinese. */
+export async function generateReplyInTheirLanguage(
+  params: Parameters<typeof generateDraftReply>[0] & { latestTexts: string[] }
+): Promise<GeneratedDraft> {
+  const { latestTexts, ...request } = params;
+  const first = await generateDraftReply(request);
+  if (!wroteInEnglish(latestTexts) || !HAN.test(first.replyText)) return first;
+  const retry = await generateDraftReply({
+    ...request,
+    userMessage: `${request.userMessage}\n\nThe person wrote in English, so reply_text must be written in English only, with no Chinese characters.`,
+  });
+  return {
+    ...retry,
+    usage: {
+      inputTokens: first.usage.inputTokens + retry.usage.inputTokens,
+      outputTokens: first.usage.outputTokens + retry.usage.outputTokens,
+      cacheReadTokens: first.usage.cacheReadTokens + retry.usage.cacheReadTokens,
+    },
+  };
+}
+
 export async function generateDraftReply({
   client,
   model,

@@ -73,7 +73,7 @@ for folder, label in [("異議", "異議"), ("對話範例", "對話範例")]:
 links = [{
     "label": "購買教學",
     "url": BUY_URL,
-    "description": "對方問價格、怎麼買、要連結，或說出痛點、回答追蹤問題、猶豫後要給下一步時。對方說已經買了、用 Windows、在生氣或第二次拒絕時不要送。",
+    "description": "每一則回覆都送。只有對方說已經買了、罵人或不耐煩、用 Windows、第二次拒絕時不送。",
 }]
 
 problems = [f"{k} is {len(settings[k])} chars (max {LIMITS[k]})" for k in ("role", "voice", "guardrails", "goals") if len(settings[k]) > LIMITS[k]]

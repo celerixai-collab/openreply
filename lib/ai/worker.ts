@@ -37,7 +37,7 @@ import { getAnthropicClient, isAiConfigured, type AnthropicMessagesClient } from
 import {
   classifyAnthropicError,
   finalizeDraft,
-  generateDraftReply,
+  generateReplyInTheirLanguage,
 } from "./generate";
 import { loadConversationHistory, type LoadedTurn } from "./history";
 import { buildSystemBlocks, buildUserMessage, type HistoryTurn } from "./prompt";
@@ -300,11 +300,12 @@ export async function processAiDraft(
 
   let draft;
   try {
-    const generated = await generateDraftReply({
+    const generated = await generateReplyInTheirLanguage({
       client: deps.getClient(),
       model: base.model,
       system: brain.system,
       userMessage: buildUserMessage(historyTurns, latestTurns),
+      latestTexts: latestTurns.map((turn) => turn.text),
     });
     draft = finalizeDraft(generated, {
       disclosureText: assistant.disclosureText,
@@ -549,11 +550,12 @@ export async function processAiPlayground(
     const latest = turns.slice(split).map(toTurn);
     const firstReply = !turns.some((turn) => turn.from === "creator");
 
-    const generated = await generateDraftReply({
+    const generated = await generateReplyInTheirLanguage({
       client: deps.getClient(),
       model: assistant?.model || AI_MODEL,
       system: brain.system,
       userMessage: buildUserMessage(history, latest),
+      latestTexts: latest.map((turn) => turn.text),
     });
     const draft = finalizeDraft(generated, {
       disclosureText,

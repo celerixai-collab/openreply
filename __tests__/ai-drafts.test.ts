@@ -284,6 +284,22 @@ describe("processAiDraft", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
+  it("writes the reply again in English when they wrote in English and it came back in Chinese", async () => {
+    seedBurst(["mid_2", "how much is it?"]);
+    h.mockGetMessages.mockResolvedValue([
+      { id: "mid_2", message: "how much is it?", from: { id: "fan_1", username: "fan.one" }, created_time: "2026-10-09T10:00:20+0000" },
+    ]);
+    create = vi
+      .fn()
+      .mockResolvedValueOnce(claudeReply({ reply_text: "早鳥價 $81" }))
+      .mockResolvedValueOnce(claudeReply({ reply_text: "The early-bird price is $81 🙌", language: "en" }));
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("created");
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(create.mock.calls[1][0])).toContain("reply_text must be written in English");
+    expect(h.drafts[0]).toMatchObject({ draftText: "The early-bird price is $81 🙌", inputTokens: 2000 });
+  });
+
   it("sends a last reply before ending the conversation", async () => {
     seedBurst(["mid_2", "煩死了 不要再傳了"]);
     create = vi.fn(async () => claudeReply({ reply_text: "好，收到了", intent: "declined", end_conversation: true }));
