@@ -24,7 +24,9 @@ const CHECKS = {
   emoji: (r, want) => !want || EMOJI.test(r.replyText),
   lang: (r, lang) => (r.language ?? "").toLowerCase().startsWith(lang),
   intent: (r, intent) => r.intent === intent,
-  noGuarantee: (r, want) => !want || !/保證|一定會|guarantee/i.test(r.outgoingText),
+  // "沒辦法保證" is the right answer, so negated forms do not count.
+  noGuarantee: (r, want) =>
+    !want || !/保證|一定會|guarantee/i.test(r.outgoingText.replace(/(沒辦法|無法|不能|不會|不敢)(跟你)?保證|can'?t guarantee|cannot guarantee/gi, "")),
 };
 
 async function runOne(accountId, testCase) {
