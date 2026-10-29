@@ -15,33 +15,27 @@ import {
 } from "@/lib/instagram/send-messages";
 import { isInstagramThrottle } from "@/lib/instagram/delivery-errors";
 import { getRedisConnection } from "@/lib/queue/client";
+import {
+  CLOSED_KEY,
+  REPLIED_KEY,
+  REPLY_VARIANTS,
+  SENT_KEY,
+  findLaunchAudience,
+  getDripSettings,
+  setDripSettings,
+} from "@/lib/launch/launch-drip";
 
 /**
- * One-off launch announcement: one DM to everyone who ever commented on a
- * "剪輯室 早鳥等候 A–F" campaign. Owners and admins only. Each person is sent
- * at most once (a Redis set remembers who got it), a call sends at most
- * `limit` people, and it stops early when Instagram starts throttling.
+ * One-off launch announcement to everyone who ever commented on a
+ * "剪輯室 早鳥等候 A–F" campaign. Owners and admins only. "dm" and "reply"
+ * send one batch now; "drip" switches the worker's background public replies
+ * on or off and reports how far they have got.
  */
-const CAMPAIGN_NAME = /^剪輯室 早鳥等候 [A-F]$/;
-const SENT_KEY = "launch-blast:2026-10-28:sent";
-// People Instagram refused because their last interaction is too old; skipped from now on.
-const CLOSED_KEY = "launch-blast:2026-10-28:closed";
-// People whose old comment already got the public nudge (or could not take one).
-const REPLIED_KEY = "launch-blast:2026-10-28:replied";
-
-// Positive-emoji public replies, rotated so they do not read as one pasted line.
-const REPLY_VARIANTS = [
-  "剪輯系統上線了 🎉 早鳥價 $81 只到 11/6，回覆「{kw}」我馬上私訊連結給你 🙌",
-  "Leo 剪輯室開賣了 🔥 早鳥價到 11/6，回覆「{kw}」領取購買連結 ✨",
-  "等很久了吧 😆 剪輯系統現在上線，早鳥優惠趕快搶，回覆「{kw}」拿連結 👉",
-  "好消息 🎊 AI 剪輯系統開賣，早鳥價只到 11/6，回覆「{kw}」我私訊你連結 💛",
-];
-
 const bodySchema = z.object({
   // "dm": the announcement DM with a link button. "reply": a public reply under
   // the person's latest comment that asks them to answer with the keyword, which
   // re-opens the messaging window for the campaign's own DM.
-  mode: z.enum(["dm", "reply"]).default("dm"),
+  mode: z.enum(["dm", "reply", "drip"]).default("dm"),
   text: z.string().max(600).default(""),
   buttonTitle: z.string().max(20).default(""),
   url: z.string().url().optional(),
@@ -49,6 +43,12 @@ const bodySchema = z.object({
   dryRun: z.boolean().default(false),
   // Send only to these Instagram usernames (test sends).
   usernames: z.array(z.string().min(1)).max(25).optional(),
+  // People whose campaign DM was sent at or after this time already have the
+  // purchase link and are skipped.
+  launchAt: z.string().datetime({ offset: true }).optional(),
+  // drip mode: switch it on or off, and how many replies it may post in all.
+  enabled: z.boolean().optional(),
+  budget: z.number().int().min(0).max(5000).optional(),
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,46 +66,55 @@ export async function POST(request: NextRequest) {
     );
   }
   const { mode, text, buttonTitle, url, limit, dryRun, usernames } = parsed.data;
+  const launchAt = parsed.data.launchAt ? new Date(parsed.data.launchAt) : undefined;
   if (mode === "dm" && (!text || !buttonTitle || !url)) {
     return NextResponse.json({ success: false, error: "dm mode needs text, buttonTitle and url" }, { status: 400 });
   }
   const workspaceId = context.workspaceId;
 
-  const campaigns = (
-    await prisma.automation.findMany({
-      where: { workspaceId },
-      include: { instagramAccount: true },
-    })
-  ).filter((c) => CAMPAIGN_NAME.test(c.name));
+  const redis = getRedisConnection();
+  const drip = await getDripSettings();
+  const { campaigns, people, gotLink } = await findLaunchAudience(workspaceId, {
+    realCommentsOnly: mode !== "dm",
+    launchAt: launchAt ?? drip.launchAt,
+  });
   if (campaigns.length === 0) {
     return NextResponse.json({ success: false, error: "No A–F campaigns found" }, { status: 404 });
   }
   const accountById = new Map(campaigns.map((c) => [c.instagramAccountId, c.instagramAccount]));
-
-  // One row per person per account, the most recent comment first.
-  const people = await prisma.dmLog.findMany({
-    where: {
-      automationId: { in: campaigns.map((c) => c.id) },
-      // Button taps are logged under a made-up "reveal:" id; only real comments take a reply.
-      ...(mode === "reply" ? { NOT: { commentId: { startsWith: "reveal:" } } } : {}),
-    },
-    distinct: ["instagramAccountId", "commenterId"],
-    orderBy: { createdAt: "desc" },
-    select: {
-      instagramAccountId: true,
-      commenterId: true,
-      commenterName: true,
-      createdAt: true,
-      commentId: true,
-      automationId: true,
-    },
-  });
   const keywordByAutomation = new Map(campaigns.map((c) => [c.id, c.keywords?.[0] ?? "剪輯"]));
-
-  const redis = getRedisConnection();
-  const alreadySent = new Set(await redis.smembers(SENT_KEY));
   const closed = new Set(await redis.smembers(CLOSED_KEY));
   const replied = new Set(await redis.smembers(REPLIED_KEY));
+
+  if (mode === "drip") {
+    if (parsed.data.enabled !== undefined) {
+      const effectiveLaunchAt = launchAt ?? drip.launchAt;
+      if (parsed.data.enabled && !effectiveLaunchAt) {
+        return NextResponse.json({ success: false, error: "drip needs launchAt the first time" }, { status: 400 });
+      }
+      await setDripSettings({
+        enabled: parsed.data.enabled,
+        budget: parsed.data.budget ?? drip.budget,
+        launchAt: effectiveLaunchAt ?? new Date(),
+        workspaceId,
+      });
+    }
+    const now = await getDripSettings();
+    const left = people.filter((p) => !gotLink.has(p.commenterId) && !replied.has(p.commenterId));
+    return NextResponse.json({
+      success: true,
+      data: {
+        enabled: now.enabled,
+        budget: now.budget,
+        launchAt: now.launchAt?.toISOString() ?? null,
+        uniquePeople: people.length,
+        alreadyHaveLink: people.filter((p) => gotLink.has(p.commenterId)).length,
+        replied: replied.size,
+        left: left.length,
+        next: left.slice(0, 5).map((p) => p.commenterName ?? p.commenterId),
+      },
+    });
+  }
 
   let targetIgsids: Set<string> | null = null;
   if (usernames?.length) {
@@ -124,7 +133,7 @@ export async function POST(request: NextRequest) {
 
   const pending = people.filter(
     (p) =>
-      !alreadySent.has(p.commenterId) &&
+      !gotLink.has(p.commenterId) &&
       (mode === "reply"
         ? !replied.has(p.commenterId)
         : !closed.has(p.commenterId) || Boolean(usernames?.length)) &&
@@ -135,7 +144,7 @@ export async function POST(request: NextRequest) {
   const summary = {
     campaigns: campaigns.length,
     uniquePeople: people.length,
-    alreadySent: alreadySent.size,
+    alreadySent: gotLink.size,
     closed: closed.size,
     replied: replied.size,
     mode,

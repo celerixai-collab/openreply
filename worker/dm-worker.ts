@@ -5,6 +5,7 @@ import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
+import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
   requeuePersonDedupSkips,
@@ -93,10 +94,19 @@ async function poll() {
 setTimeout(() => void poll(), 10_000);
 const pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
 
+// The launch announcement's public replies, one a minute while it is switched on.
+const launchDripTimer = setInterval(() => {
+  runLaunchDripTick().catch((error) => {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[DM Worker] Launch drip failed:", message);
+  });
+}, 60_000);
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
+  clearInterval(launchDripTimer);
   await Promise.all([worker.close(), aiWorker.close()]);
   process.exit(0);
 }
