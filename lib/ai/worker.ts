@@ -29,7 +29,7 @@ import {
   DM_WINDOW_MS,
   composeOutgoingText,
 } from "./constants";
-import { writePlaygroundResult } from "./playground";
+import { writePlaygroundResult, type PlaygroundBrain } from "./playground";
 import { requestDraftSend } from "./drafts";
 import { isAiPaused, isBotSend, pauseAiFor } from "./takeover";
 import { getAnthropicClient, isAiConfigured, type AnthropicMessagesClient } from "./client";
@@ -103,19 +103,29 @@ type AssistantPromptSettings = {
  */
 export async function loadAssistantBrain(
   accountId: string,
-  assistant: AssistantPromptSettings
+  assistant: AssistantPromptSettings,
+  draft?: Pick<PlaygroundBrain, "entries" | "links">
 ) {
   const [entries, linkRows, campaigns] = await Promise.all([
-    prisma.aiKnowledgeEntry.findMany({
-      where: { instagramAccountId: accountId, enabled: true },
-      orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-      select: { title: true, content: true },
-    }),
-    prisma.aiLink.findMany({
-      where: { instagramAccountId: accountId, enabled: true },
-      orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, label: true, url: true, description: true },
-    }),
+    draft
+      ? draft.entries.filter((entry) => entry.enabled !== false)
+      : prisma.aiKnowledgeEntry.findMany({
+          where: { instagramAccountId: accountId, enabled: true },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          select: { title: true, content: true },
+        }),
+    draft
+      ? draft.links.map((link, index) => ({
+          id: `draft-link-${index}`,
+          label: link.label,
+          url: link.url,
+          description: link.description ?? "",
+        }))
+      : prisma.aiLink.findMany({
+          where: { instagramAccountId: accountId, enabled: true },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          select: { id: true, label: true, url: true, description: true },
+        }),
     prisma.automation.findMany({
       where: {
         instagramAccountId: accountId,
@@ -484,7 +494,7 @@ export async function processAiPlayground(
   job: Pick<Job<AiPlaygroundJob>, "data">,
   deps: AiWorkerDeps = defaultDeps
 ): Promise<void> {
-  const { playgroundId, accountId, turns } = job.data;
+  const { playgroundId, accountId, turns, brain: draftBrain } = job.data;
   try {
     if (!isAiConfigured()) {
       await writePlaygroundResult(playgroundId, {
@@ -496,16 +506,17 @@ export async function processAiPlayground(
     const assistant = await prisma.aiAssistant.findUnique({
       where: { instagramAccountId: accountId },
     });
+    const saved = draftBrain?.settings ?? assistant;
     const settings = {
-      role: assistant?.role ?? "",
-      voice: assistant?.voice ?? "",
-      guardrails: assistant?.guardrails ?? "",
-      goals: assistant?.goals ?? "",
-      knowledge: assistant?.knowledge ?? "",
+      role: saved?.role ?? "",
+      voice: saved?.voice ?? "",
+      guardrails: saved?.guardrails ?? "",
+      goals: saved?.goals ?? "",
+      knowledge: saved?.knowledge ?? "",
       campaignIds: assistant?.campaignIds ?? [],
     };
     const disclosureText = assistant?.disclosureText ?? DEFAULT_DISCLOSURE_TEXT;
-    const brain = await loadAssistantBrain(accountId, settings);
+    const brain = await loadAssistantBrain(accountId, settings, draftBrain);
 
     // The trailing messages from the person are what the reply answers.
     let split = turns.length;

@@ -6,6 +6,7 @@
 
 import { Queue } from "bullmq";
 import { getRedisConnection } from "@/lib/queue/client";
+import type { PlaygroundBrain } from "@/lib/ai/playground";
 
 export const AI_QUEUE_NAME = "ai-drafts";
 export const AI_DRAFT_JOB_NAME = "ai-draft";
@@ -62,6 +63,8 @@ export interface AiPlaygroundJob {
   // Internal InstagramAccount.id.
   accountId: string;
   turns: { from: "person" | "creator"; text: string }[];
+  // A draft brain to try instead of the account's saved one.
+  brain?: PlaygroundBrain;
 }
 
 export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob | AiPlaygroundJob;

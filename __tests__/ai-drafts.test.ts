@@ -768,5 +768,41 @@ describe("second brain: links, gaps and the playground", () => {
     expect(h.mockSendDirectMessage).not.toHaveBeenCalled();
     expect(h.mockSendLinkButton).not.toHaveBeenCalled();
   });
+
+  it("tries a draft brain in the playground instead of the saved one", async () => {
+    vi.stubEnv("REDIS_URL", "redis://test");
+    h.mockPrisma.aiLink.findMany.mockResolvedValue([link]);
+    h.mockPrisma.aiKnowledgeEntry.findMany.mockClear();
+    (h.mockPrisma as unknown as { aiAssistant: { findUnique: ReturnType<typeof vi.fn> } }).aiAssistant = {
+      findUnique: vi.fn(async () => ({ ...assistant, mode: "auto" })),
+    };
+    create = vi.fn(async () => claudeReply({ reply_text: "早鳥價 $81 👇", intent: "pricing", send_link_id: "draft-link-0" }));
+
+    await processAiPlayground(
+      {
+        data: {
+          playgroundId: "pg_2",
+          accountId: "acct_1",
+          turns: [{ from: "person", text: "多少錢？" }],
+          brain: {
+            settings: { role: "開賣後的角色", voice: "", guardrails: "", goals: "", knowledge: "" },
+            entries: [{ title: "價格", content: "早鳥價 $81，只到 11/6" }],
+            links: [{ label: "購買教學", url: "https://example.com/buy", description: "" }],
+          },
+        },
+      },
+      deps()
+    );
+
+    const system = JSON.stringify(create.mock.calls[0][0].system);
+    expect(system).toContain("開賣後的角色");
+    expect(system).toContain("早鳥價 $81，只到 11/6");
+    expect(system).not.toContain("Leo 的小助理");
+    expect(h.mockPrisma.aiKnowledgeEntry.findMany).not.toHaveBeenCalled();
+    expect(await readPlaygroundResult("pg_2")).toMatchObject({
+      status: "done",
+      link: { id: "draft-link-0", label: "購買教學", url: "https://example.com/buy" },
+    });
+  });
 });
 

@@ -6,6 +6,8 @@
  */
 
 import { z } from "zod";
+import { BRAIN_LIMITS, KnowledgeEntrySchema, LinkSchema } from "@/lib/ai/brain";
+import { AI_SETTINGS_LIMITS } from "@/lib/ai/constants";
 import { getRedisConnection } from "@/lib/queue/client";
 
 export const PLAYGROUND_TTL_SECONDS = 15 * 60;
@@ -25,6 +27,27 @@ export const PlaygroundTurns = z
   .refine((turns) => turns.at(-1)?.from === "person", "The last message must be from the person");
 
 export type PlaygroundTurn = z.infer<typeof PlaygroundTurns>[number];
+
+/**
+ * A draft brain to try instead of the saved one: the run reads these settings,
+ * entries and links, and the account's saved brain is left untouched.
+ */
+export const PlaygroundBrain = z
+  .object({
+    settings: z
+      .object({
+        role: z.string().max(AI_SETTINGS_LIMITS.role),
+        voice: z.string().max(AI_SETTINGS_LIMITS.voice),
+        guardrails: z.string().max(AI_SETTINGS_LIMITS.guardrails),
+        goals: z.string().max(AI_SETTINGS_LIMITS.goals),
+        knowledge: z.string().max(AI_SETTINGS_LIMITS.knowledge).default(""),
+      })
+      .passthrough(),
+    entries: z.array(KnowledgeEntrySchema).max(BRAIN_LIMITS.entries),
+    links: z.array(LinkSchema).max(BRAIN_LIMITS.links),
+  });
+
+export type PlaygroundBrain = z.infer<typeof PlaygroundBrain>;
 
 export type PlaygroundResult =
   | { status: "pending" }

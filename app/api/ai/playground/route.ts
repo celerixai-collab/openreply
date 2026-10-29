@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { accountAccess, accessError } from "@/lib/ai/route-access";
 import {
+  PlaygroundBrain,
   PlaygroundTurns,
   readPlaygroundResult,
   takePlaygroundRun,
@@ -16,12 +17,14 @@ export const runtime = "nodejs";
 /** Queue a playground run; poll GET ?id= for the result. */
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as
-    | { accountId?: unknown; turns?: unknown }
+    | { accountId?: unknown; turns?: unknown; brain?: unknown }
     | null;
   const access = await accountAccess(body?.accountId, { manage: true });
   if (!access.ok) return access.response;
   const turns = PlaygroundTurns.safeParse(body?.turns);
   if (!turns.success) return accessError(400, firstIssue(turns.error)).response;
+  const brain = body?.brain === undefined ? undefined : PlaygroundBrain.safeParse(body.brain);
+  if (brain && !brain.success) return accessError(400, firstIssue(brain.error)).response;
   if (!(await takePlaygroundRun(access.workspaceId))) {
     return accessError(429, "Too many playground runs this hour. Try again later.").response;
   }
@@ -30,7 +33,7 @@ export async function POST(request: NextRequest) {
   await writePlaygroundResult(id, { status: "pending" });
   await getAiQueue().add(
     AI_PLAYGROUND_JOB_NAME,
-    { playgroundId: id, accountId: access.account.id, turns: turns.data },
+    { playgroundId: id, accountId: access.account.id, turns: turns.data, brain: brain?.data },
     { jobId: `ai-playground_${id}`, removeOnComplete: true, removeOnFail: true }
   );
   return NextResponse.json({ success: true, data: { id } }, { status: 202 });
