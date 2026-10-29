@@ -166,8 +166,52 @@
    ]
   ],
   "expect": {
-   "silent": true,
-   "ends": true
+   "silent": false,
+   "ends": true,
+   "link": false,
+   "emoji": true,
+   "noQuestion": true,
+   "mentionsAny": [
+    "成品",
+    "作品"
+   ],
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "paid",
+  "turns": [
+   [
+    "person",
+    "我付款好了！"
+   ]
+  ],
+  "expect": {
+   "silent": false,
+   "ends": true,
+   "link": false,
+   "emoji": true,
+   "mentionsAny": [
+    "成品",
+    "作品"
+   ],
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "bought-en",
+  "turns": [
+   [
+    "person",
+    "just bought it!"
+   ]
+  ],
+  "expect": {
+   "silent": false,
+   "ends": true,
+   "link": false,
+   "lang": "en",
+   "maxChars": 260
   }
  }
 ]

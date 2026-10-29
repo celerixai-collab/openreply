@@ -265,8 +265,16 @@
    ]
   ],
   "expect": {
-   "silent": true,
-   "ends": true
+   "silent": false,
+   "ends": true,
+   "link": false,
+   "emoji": true,
+   "noQuestion": true,
+   "mentionsAny": [
+    "成品",
+    "作品"
+   ],
+   "maxChars": 90
   }
  },
  {
