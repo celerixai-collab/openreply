@@ -23,7 +23,9 @@ const CHECKS = {
   gap: (r, want) => r.knowledgeGap === want,
   noQuestion: (r, want) => !want || !/[?？]/.test(r.replyText),
   emoji: (r, want) => !want || EMOJI.test(r.replyText),
-  lang: (r, lang) => (r.language ?? "").toLowerCase().startsWith(lang),
+  // The model's own language tag can be wrong, so English also means no Chinese characters.
+  lang: (r, lang) =>
+    (r.language ?? "").toLowerCase().startsWith(lang) && (lang !== "en" || !/\p{Script=Han}/u.test(r.replyText)),
   intent: (r, intent) => r.intent === intent,
   // "沒辦法保證" is the right answer, so negated forms do not count.
   noGuarantee: (r, want) =>
