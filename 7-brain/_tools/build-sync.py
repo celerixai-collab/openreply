@@ -1,7 +1,10 @@
 """Build what OpenReply's AI reads from this vault: 7-brain/03-output/openreply-sync.json.
 
 Settings come from the 規則 pages, knowledge entries from every live, public page in
-產品 and 常見問題 plus current.md, and the one link button from current.md.
+產品 and 常見問題 plus current.md, the objection library (異議) and the example
+conversations (對話範例), and the one link button from current.md. Objections and
+examples are synced while still drafts so they can be tried in the playground;
+the AI stays off until Leo confirms them.
 Run: python3 7-brain/_tools/build-sync.py
 """
 import json, os, re, sys
@@ -9,7 +12,7 @@ import json, os, re, sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 WIKI = os.path.join(ROOT, "02-wiki")
 LIMITS = {"role": 2000, "voice": 2000, "guardrails": 4000, "goals": 2000, "entry": 4000}
-WAITLIST = "https://leo-waitlist.vercel.app/studio/"
+BUY_URL = "https://openreply-coral-three.vercel.app/r/xnJVq5OSJw"
 
 
 def read(path):
@@ -44,8 +47,8 @@ voice, _, disclosure = voice.partition("AI 揭露文字：")
 settings = {
     "role": role,
     "voice": voice.strip(),
-    "guardrails": rule("AI 不能講的事") + "\n\n" + rule("特殊情況怎麼處理"),
-    "goals": rule("粉絲回覆後怎麼接"),
+    "guardrails": "\n\n".join(rule(name) for name in ("AI 不能講的事", "特殊情況怎麼處理", "學到的規則")),
+    "goals": rule("對話階段"),
     "humanPauseHours": 1,
     "knowledge": "",
 }
@@ -60,11 +63,17 @@ for folder in ["產品", "常見問題"]:
             continue
         content = f"粉絲可能這樣問：{meta.get('questions', '').strip('[]')}\n可以直接回：{meta.get('answer_short', '')}\n\n{body}"
         entries.append({"title": meta["title"], "content": content})
+for folder, label in [("異議", "異議"), ("對話範例", "對話範例")]:
+    for name in sorted(os.listdir(os.path.join(WIKI, folder))):
+        meta, body = read(os.path.join(WIKI, folder, name))
+        if meta.get("status") == "outdated":
+            continue
+        entries.append({"title": f"{label}：{meta['title']}", "content": body})
 
 links = [{
-    "label": "加入早鳥名單",
-    "url": WAITLIST,
-    "description": "對方想加入、問怎麼報名、問價格或開賣時間，或對話最後要引導報名時。對方說已經報名就不要再送。",
+    "label": "購買教學",
+    "url": BUY_URL,
+    "description": "對方問價格、怎麼買、要連結，或說出痛點、回答追蹤問題、猶豫後要給下一步時。對方說已經買了、用 Windows、在生氣或第二次拒絕時不要送。",
 }]
 
 problems = [f"{k} is {len(settings[k])} chars (max {LIMITS[k]})" for k in ("role", "voice", "guardrails", "goals") if len(settings[k]) > LIMITS[k]]
