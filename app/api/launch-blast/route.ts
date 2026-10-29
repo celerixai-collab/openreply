@@ -12,8 +12,9 @@ import {
 import {
   sendCommentReply,
   sendDirectMessageWithLinkButton,
+  sendPrivateReplyWithLinkButton,
 } from "@/lib/instagram/send-messages";
-import { isInstagramThrottle } from "@/lib/instagram/delivery-errors";
+import { isInstagramThrottle, isPermanentRejection } from "@/lib/instagram/delivery-errors";
 import { getRedisConnection } from "@/lib/queue/client";
 import {
   CLOSED_KEY,
@@ -35,7 +36,7 @@ const bodySchema = z.object({
   // "dm": the announcement DM with a link button. "reply": a public reply under
   // the person's latest comment that asks them to answer with the keyword, which
   // re-opens the messaging window for the campaign's own DM.
-  mode: z.enum(["dm", "reply", "drip"]).default("dm"),
+  mode: z.enum(["dm", "reply", "drip", "recent"]).default("dm"),
   text: z.string().max(600).default(""),
   buttonTitle: z.string().max(20).default(""),
   url: z.string().url().optional(),
@@ -67,8 +68,8 @@ export async function POST(request: NextRequest) {
   }
   const { mode, text, buttonTitle, url, limit, dryRun, usernames } = parsed.data;
   const launchAt = parsed.data.launchAt ? new Date(parsed.data.launchAt) : undefined;
-  if (mode === "dm" && (!text || !buttonTitle || !url)) {
-    return NextResponse.json({ success: false, error: "dm mode needs text, buttonTitle and url" }, { status: 400 });
+  if ((mode === "dm" || mode === "recent") && (!text || !buttonTitle || !url)) {
+    return NextResponse.json({ success: false, error: `${mode} mode needs text, buttonTitle and url` }, { status: 400 });
   }
   const workspaceId = context.workspaceId;
 
@@ -113,6 +114,101 @@ export async function POST(request: NextRequest) {
         left: left.length,
         next: left.slice(0, 5).map((p) => p.commenterName ?? p.commenterId),
       },
+    });
+  }
+
+  if (mode === "recent") {
+    // Everyone Instagram still lets us message directly: a comment from the
+    // last 7 days that never got a private reply takes one, and anyone who
+    // tapped a button in the last 24 hours can be sent a plain DM.
+    const now = Date.now();
+    const logs = await prisma.dmLog.findMany({
+      where: {
+        automationId: { in: campaigns.map((c) => c.id) },
+        createdAt: { gte: new Date(now - 7 * 24 * 3600 * 1000) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        instagramAccountId: true,
+        commenterId: true,
+        commenterName: true,
+        commentId: true,
+        status: true,
+        errorMessage: true,
+        createdAt: true,
+      },
+    });
+    type Target = { log: (typeof logs)[number]; via: "private" | "dm" };
+    const targets = new Map<string, Target>();
+    for (const log of logs) {
+      if (gotLink.has(log.commenterId) || closed.has(log.commenterId) || targets.has(log.commenterId)) continue;
+      const isComment = !log.commentId.startsWith("reveal:");
+      if (isComment && log.status !== "SENT" && !/invalid for a private reply/i.test(log.errorMessage ?? "")) {
+        targets.set(log.commenterId, { log, via: "private" });
+      }
+    }
+    for (const log of logs) {
+      if (gotLink.has(log.commenterId) || closed.has(log.commenterId) || targets.has(log.commenterId)) continue;
+      if (log.commentId.startsWith("reveal:") && now - log.createdAt.getTime() < 23 * 3600 * 1000) {
+        targets.set(log.commenterId, { log, via: "dm" });
+      }
+    }
+    const all = [...targets.values()];
+    const batch = all.slice(0, limit);
+    const counts = {
+      privateReply: all.filter((t) => t.via === "private").length,
+      dm: all.filter((t) => t.via === "dm").length,
+    };
+    if (dryRun) {
+      return NextResponse.json({
+        success: true,
+        data: { ...counts, total: all.length, wouldSend: batch.map((t) => `${t.log.commenterName ?? t.log.commenterId} (${t.via})`) },
+      });
+    }
+    const sent: string[] = [];
+    const failed: { user: string; error: string }[] = [];
+    let throttled = 0;
+    for (const { log, via } of batch) {
+      const label = log.commenterName ?? log.commenterId;
+      const account = accountById.get(log.instagramAccountId);
+      if (!account || !hasInstagramCredentials(account)) {
+        failed.push({ user: label, error: "account has no credentials" });
+        continue;
+      }
+      try {
+        const igContext = await createInstagramContext(account, `launch-recent:${log.commentId}`);
+        const buttons = [{ title: buttonTitle, url: url as string }];
+        if (via === "private") {
+          await sendPrivateReplyWithLinkButton({
+            context: igContext,
+            instagramAccountId: account.instagramId,
+            commentId: log.commentId,
+            text,
+            buttons,
+          });
+        } else {
+          await sendDirectMessageWithLinkButton({
+            context: igContext,
+            instagramAccountId: account.instagramId,
+            userId: log.commenterId,
+            text,
+            buttons,
+          });
+        }
+        await redis.sadd(SENT_KEY, log.commenterId);
+        sent.push(`${label} (${via})`);
+        throttled = 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push({ user: `${label} (${via})`, error: message.slice(0, 200) });
+        if (isPermanentRejection(error)) await redis.sadd(CLOSED_KEY, log.commenterId);
+        if (isInstagramThrottle(error) && ++throttled >= 3) break;
+      }
+      await sleep(1500);
+    }
+    return NextResponse.json({
+      success: true,
+      data: { ...counts, total: all.length, sent, failed, stoppedEarly: throttled >= 3 },
     });
   }
 
