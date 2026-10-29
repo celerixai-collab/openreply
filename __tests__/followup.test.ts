@@ -6,6 +6,7 @@ const { mockPrisma, mockQueue, mockIsAiPaused } = vi.hoisted(() => ({
     contact: { findFirst: vi.fn() },
     aiDraft: { findFirst: vi.fn() },
     dmLog: { findFirst: vi.fn() },
+    linkClick: { findFirst: vi.fn() },
   },
   mockQueue: { add: vi.fn(), getJob: vi.fn() },
   mockIsAiPaused: vi.fn(),
@@ -35,6 +36,7 @@ beforeEach(() => {
   mockPrisma.aiAssistant.findUnique.mockResolvedValue(null);
   mockPrisma.aiDraft.findFirst.mockResolvedValue(null);
   mockIsAiPaused.mockResolvedValue(false);
+  mockPrisma.linkClick.findFirst.mockResolvedValue(null);
 });
 
 describe("scheduleFollowUp", () => {
@@ -74,6 +76,14 @@ describe("followUpBlockedReason", () => {
     expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toBe("not on the AI test list");
     mockPrisma.contact.findFirst.mockResolvedValue({ username: "im.ynyn" });
     expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toBeNull();
+  });
+
+  it("skips people who already tapped the campaign's link, like ManyChat's follow-up", async () => {
+    mockPrisma.linkClick.findFirst.mockResolvedValue({ id: "click_1" });
+    expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toBe("they already opened the link");
+    expect(mockPrisma.linkClick.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ automationId: "auto_a", recipientHash: expect.any(String) }) })
+    );
   });
 
   it("skips a conversation the creator took over", async () => {

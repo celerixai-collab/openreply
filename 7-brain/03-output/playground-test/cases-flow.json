@@ -1,0 +1,173 @@
+[
+ {
+  "id": "fu-2h",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "大概兩個小時"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "fu-editor",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "我都請剪輯師剪"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "mentionsAny": [
+    "剪輯師"
+   ],
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "fu-beginner",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "我還沒開始拍片欸"
+   ]
+  ],
+  "expect": {
+   "maxChars": 90,
+   "noGuarantee": true
+  }
+ },
+ {
+  "id": "fu-fast",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "很快啊 十分鐘"
+   ]
+  ],
+  "expect": {
+   "maxChars": 90,
+   "noApology": true
+  }
+ },
+ {
+  "id": "dm-food",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "person",
+    "我是做美食的"
+   ]
+  ],
+  "expect": {
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "dm-knowledge",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "person",
+    "知識型的 講解類"
+   ]
+  ],
+  "expect": {
+   "mentionsAny": [
+    "圖解"
+   ],
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "fu-windows",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "我是用 Windows 的"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "Mac"
+   ],
+   "link": false,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "fu-bought",
+  "turns": [
+   [
+    "creator",
+    "剪輯系統今天正式開賣 🎉 點下面看購買教學，照步驟就能直接上課 👇\n\n想問你，你平常都拍哪一種影片呀？😊"
+   ],
+   [
+    "creator",
+    "嗨～想問你，你現在剪一支影片大概要花多久呀？😊"
+   ],
+   [
+    "person",
+    "我已經買了"
+   ]
+  ],
+  "expect": {
+   "silent": true,
+   "ends": true
+  }
+ }
+]

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/client";
 import { isAiPaused, isConversationEnded } from "@/lib/ai/takeover";
 import { FOLLOWUP_JOB_NAME, getDMQueue } from "@/lib/queue/client";
+import { hashRecipientId } from "@/lib/tracking/server";
 
 /**
  * The campaign follow-up: one message per person per campaign, sent once the
@@ -116,8 +117,9 @@ const STOP_INTENTS = ["already_joined", "declined"];
 
 /**
  * Why a due follow-up should not go out, or null to send it: the AI test run
- * is limited to other usernames, the creator took the conversation over, or
- * the person already joined or said no.
+ * is limited to other usernames, the creator took the conversation over, the
+ * conversation was ended, they already opened the campaign's link, or they
+ * already joined or said no.
  */
 export async function followUpBlockedReason(
   automationId: string,
@@ -144,6 +146,12 @@ export async function followUpBlockedReason(
   if (await isConversationEnded(instagramAccountId, userId).catch(() => false)) {
     return "the conversation was ended";
   }
+  // Like ManyChat's follow-up: it reminds people who have not opened the link yet.
+  const clicked = await prisma.linkClick.findFirst({
+    where: { automationId, recipientHash: hashRecipientId(userId) },
+    select: { id: true },
+  });
+  if (clicked) return "they already opened the link";
 
   const lastDraft = await prisma.aiDraft.findFirst({
     where: { instagramAccountId, igsid: userId },

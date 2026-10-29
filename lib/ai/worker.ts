@@ -418,7 +418,7 @@ export async function processAiEcho(
     data: { status: "SUPERSEDED", decidedAt: new Date() },
   });
   console.log(
-    `[AI Worker] The creator replied by hand on account ${account.id}; AI paused for ${assistant.humanPauseHours}h in that conversation`
+    `[AI Worker] The creator replied by hand on account ${account.id}; AI paused for ${assistant.humanPauseHours}h in that conversation (message ${messageId.slice(-12)}: "${messageText.slice(0, 30)}")`
   );
   return "paused";
 }
