@@ -216,8 +216,7 @@
   "expect": {
    "gap": true,
    "human": false,
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -234,8 +233,7 @@
     "買斷",
     "永久"
    ],
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -255,8 +253,7 @@
     "不能退"
    ],
    "noApology": true,
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -285,8 +282,7 @@
     "Skool",
     "課程"
    ],
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -318,8 +314,7 @@
     "買家",
     "另外"
    ],
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -398,7 +393,7 @@
     "我就是 Leo"
    ],
    "maxChars": 90,
-   "link": true
+   "link": false
   }
  },
  {
@@ -528,8 +523,7 @@
   "expect": {
    "lang": "en",
    "human": false,
-   "maxChars": 260,
-   "link": true
+   "maxChars": 260
   }
  },
  {
@@ -546,8 +540,7 @@
     "爛",
     "垃圾"
    ],
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  },
  {
@@ -559,8 +552,6 @@
    ]
   ],
   "expect": {
-   "link": true,
-   "linkLabel": "購買教學",
    "noUrlInText": true,
    "mentions": [
     "IG"
@@ -624,8 +615,7 @@
    "mentions": [
     "251"
    ],
-   "maxChars": 90,
-   "link": true
+   "maxChars": 90
   }
  }
 ]

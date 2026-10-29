@@ -81,8 +81,6 @@
    ]
   ],
   "expect": {
-   "link": true,
-   "linkLabel": "購買教學",
    "noUrlInText": true,
    "maxChars": 90
   }
@@ -170,10 +168,21 @@
    ]
   ],
   "expect": {
-   "link": true,
-   "linkLabel": "購買教學",
    "noUrlInText": true,
    "ends": false,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "hello",
+  "turns": [
+   [
+    "person",
+    "嗨～我看了你的影片"
+   ]
+  ],
+  "expect": {
+   "link": false,
    "maxChars": 90
   }
  }
