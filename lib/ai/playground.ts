@@ -64,6 +64,8 @@ export type PlaygroundResult =
       knowledgeGap: boolean;
       gapQuestion: string | null;
       usedTopics: string[];
+      // After this reply the account never writes to them again.
+      endsConversation: boolean;
       // What would actually be sent (the disclosure in front of a first reply).
       outgoingText: string;
       wouldAutoSend: boolean;

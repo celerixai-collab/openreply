@@ -28,6 +28,7 @@ const reply = {
   knowledge_gap: false,
   gap_question: null,
   used_topics: ["課程"],
+  end_conversation: false,
 };
 
 function message(overrides: Partial<Anthropic.Message> = {}): Anthropic.Message {
@@ -159,6 +160,7 @@ describe("generateDraftReply", () => {
 describe("finalizeDraft", () => {
   const base: GeneratedDraft = {
     replyText: "字".repeat(400), // 1200 bytes
+    endConversation: false,
     intent: "other",
     needsHuman: false,
     handoffReason: null,
@@ -262,6 +264,7 @@ describe("prompt", () => {
 describe("links and gaps", () => {
   const base: GeneratedDraft = {
     replyText: "連結在下面 👇",
+    endConversation: false,
     intent: "link_request",
     needsHuman: false,
     handoffReason: null,

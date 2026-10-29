@@ -13,6 +13,7 @@ export const AI_DRAFT_JOB_NAME = "ai-draft";
 export const SEND_AI_DRAFT_JOB_NAME = "send-ai-draft";
 export const AI_ECHO_JOB_NAME = "ai-echo";
 export const AI_PLAYGROUND_JOB_NAME = "ai-playground";
+export const AI_NUDGE_JOB_NAME = "ai-nudge";
 
 // An echo is checked this long after it arrives, so the record of a message
 // OpenReply sent (written right after the send returns) is in place first.
@@ -67,7 +68,18 @@ export interface AiPlaygroundJob {
   brain?: PlaygroundBrain;
 }
 
-export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob | AiPlaygroundJob;
+/** A re-engagement message after the person went quiet (lib/ai/nudges.ts). */
+export interface AiNudgeJob {
+  // Internal InstagramAccount.id.
+  accountId: string;
+  igsid: string;
+  // When the person last wrote (ms); the series belongs to that silence.
+  since: number;
+  // Which of the nudge messages this is, from 0.
+  step: number;
+}
+
+export type AiQueueJob = AiDraftJob | SendAiDraftJob | AiEchoJob | AiPlaygroundJob | AiNudgeJob;
 
 export function aiEchoJobId(instagramAccountId: string, messageId: string): string {
   return `ai-echo_${instagramAccountId}_${Buffer.from(messageId).toString("base64url")}`;

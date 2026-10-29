@@ -210,6 +210,7 @@ function claudeReply(overrides: Record<string, unknown> = {}): Anthropic.Message
           knowledge_gap: false,
           gap_question: null,
           used_topics: [],
+          end_conversation: false,
           ...overrides,
         }),
       },
@@ -270,6 +271,28 @@ afterEach(() => {
 });
 
 describe("processAiDraft", () => {
+  it("ends the conversation silently when they say they bought, and stays silent after", async () => {
+    seedBurst(["mid_2", "我剛買了"]);
+    create = vi.fn(async () => claudeReply({ reply_text: "", intent: "already_joined", end_conversation: true }));
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("ended");
+    expect(h.drafts).toHaveLength(0);
+    expect(h.keys.has("ai:ended:acct_1:fan_1")).toBe(true);
+
+    seedBurst(["mid_3", "教學在哪"]);
+    await expect(processAiDraft(job("mid_3"), deps())).resolves.toBe("ended");
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a last reply before ending the conversation", async () => {
+    seedBurst(["mid_2", "煩死了 不要再傳了"]);
+    create = vi.fn(async () => claudeReply({ reply_text: "好，收到了", intent: "declined", end_conversation: true }));
+
+    await expect(processAiDraft(job("mid_2"), deps())).resolves.toBe("created");
+    expect(h.drafts[0]).toMatchObject({ draftText: "好，收到了" });
+    expect(h.keys.has("ai:ended:acct_1:fan_1")).toBe(true);
+  });
+
   it("writes one draft for a burst, from the Meta history, with emails masked", async () => {
     seedBurst(["mid_1", "(message with an email)"], ["mid_2", "還有優惠嗎？"]);
 

@@ -48,6 +48,7 @@ export const DRAFT_REPLY_SCHEMA = {
     knowledge_gap: { type: "boolean" },
     gap_question: { anyOf: [{ type: "string" }, { type: "null" }] },
     used_topics: { type: "array", items: { type: "string" } },
+    end_conversation: { type: "boolean" },
   },
   required: [
     "reply_text",
@@ -60,6 +61,7 @@ export const DRAFT_REPLY_SCHEMA = {
     "knowledge_gap",
     "gap_question",
     "used_topics",
+    "end_conversation",
   ],
   additionalProperties: false,
 } as const;
@@ -76,6 +78,7 @@ const DraftReply = z
     knowledge_gap: z.boolean(),
     gap_question: z.string().nullable(),
     used_topics: z.array(z.string()),
+    end_conversation: z.boolean(),
   })
   .strict();
 
@@ -92,6 +95,8 @@ export type GeneratedDraft = {
   gapQuestion: string | null;
   // Titles of the knowledge entries the reply relied on.
   usedTopics: string[];
+  // After this reply (which may be empty) the account never writes to them again.
+  endConversation: boolean;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -205,6 +210,7 @@ export async function generateDraftReply({
     knowledgeGap: parsed.knowledge_gap,
     gapQuestion: parsed.knowledge_gap ? parsed.gap_question?.trim() || null : null,
     usedTopics: parsed.used_topics.map((topic) => topic.trim()).filter(Boolean).slice(0, 10),
+    endConversation: parsed.end_conversation,
     usage: {
       inputTokens:
         usage.input_tokens + cacheRead + (usage.cache_creation_input_tokens ?? 0),

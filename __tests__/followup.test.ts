@@ -12,7 +12,7 @@ const { mockPrisma, mockQueue, mockIsAiPaused } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/db/client", () => ({ prisma: mockPrisma }));
-vi.mock("@/lib/ai/takeover", () => ({ isAiPaused: mockIsAiPaused }));
+vi.mock("@/lib/ai/takeover", () => ({ isAiPaused: mockIsAiPaused, isConversationEnded: async () => false }));
 vi.mock("@/lib/queue/client", () => ({
   getDMQueue: () => mockQueue,
   FOLLOWUP_JOB_NAME: "process-followup",

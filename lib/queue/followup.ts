@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/client";
-import { isAiPaused } from "@/lib/ai/takeover";
+import { isAiPaused, isConversationEnded } from "@/lib/ai/takeover";
 import { FOLLOWUP_JOB_NAME, getDMQueue } from "@/lib/queue/client";
 
 /**
@@ -140,6 +140,9 @@ export async function followUpBlockedReason(
 
   if (await isAiPaused(instagramAccountId, userId).catch(() => false)) {
     return "the creator is answering this conversation";
+  }
+  if (await isConversationEnded(instagramAccountId, userId).catch(() => false)) {
+    return "the conversation was ended";
   }
 
   const lastDraft = await prisma.aiDraft.findFirst({

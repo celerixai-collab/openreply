@@ -1,0 +1,180 @@
+[
+ {
+  "id": "price",
+  "turns": [
+   [
+    "person",
+    "多少錢？"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "mentions": [
+    "81"
+   ],
+   "maxChars": 90,
+   "ends": false
+  }
+ },
+ {
+  "id": "bought",
+  "turns": [
+   [
+    "person",
+    "我剛剛買了！"
+   ]
+  ],
+  "expect": {
+   "silent": true,
+   "ends": true
+  }
+ },
+ {
+  "id": "refund",
+  "turns": [
+   [
+    "person",
+    "買了不滿意可以退款嗎？"
+   ]
+  ],
+  "expect": {
+   "mentionsAny": [
+    "買斷"
+   ],
+   "notMentions": [
+    "退款",
+    "退費",
+    "不能退",
+    "沒辦法退"
+   ],
+   "noApology": true,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "effects",
+  "turns": [
+   [
+    "person",
+    "有幾種特效？可以選風格嗎"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "251"
+   ],
+   "mentionsAny": [
+    "4 種",
+    "四種"
+   ],
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "install",
+  "turns": [
+   [
+    "person",
+    "安裝會很難嗎？我完全不會寫程式"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "too-expensive",
+  "turns": [
+   [
+    "person",
+    "81 好貴喔"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "noApology": true,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "abusive",
+  "turns": [
+   [
+    "person",
+    "一直傳很煩欸 詐騙吧 不要再傳了"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "收到"
+   ],
+   "ends": true,
+   "link": false,
+   "noApology": true,
+   "maxChars": 20
+  }
+ },
+ {
+  "id": "windows",
+  "turns": [
+   [
+    "person",
+    "Windows 可以用嗎"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "Mac"
+   ],
+   "link": false,
+   "noApology": true,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "price-en",
+  "turns": [
+   [
+    "person",
+    "how much is it?"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "lang": "en",
+   "mentions": [
+    "81"
+   ],
+   "maxChars": 260
+  }
+ },
+ {
+  "id": "nudge-reply",
+  "turns": [
+   [
+    "creator",
+    "你還在等什麼呢？先開始，讓 Claude 當你的剪輯團隊 🙌"
+   ],
+   [
+    "person",
+    "我還在考慮"
+   ]
+  ],
+  "expect": {
+   "link": true,
+   "linkLabel": "購買教學",
+   "noUrlInText": true,
+   "ends": false,
+   "maxChars": 90
+  }
+ }
+]

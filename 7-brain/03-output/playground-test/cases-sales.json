@@ -243,13 +243,14 @@
    ]
   ],
   "expect": {
-   "mentions": [
-    "一次性"
+   "mentionsAny": [
+    "買斷"
    ],
    "notMentions": [
-    "不能退款"
+    "退款",
+    "不能退"
    ],
-   "human": false,
+   "noApology": true,
    "maxChars": 90
   }
  },
@@ -262,11 +263,8 @@
    ]
   ],
   "expect": {
-   "link": false,
-   "emoji": true,
-   "noQuestion": true,
-   "human": false,
-   "maxChars": 90
+   "silent": true,
+   "ends": true
   }
  },
  {
@@ -440,6 +438,7 @@
   "expect": {
    "link": false,
    "human": false,
+   "noApology": true,
    "maxChars": 90
   }
  },
@@ -576,6 +575,39 @@
   ],
   "expect": {
    "human": false,
+   "maxChars": 90
+  }
+ },
+ {
+  "id": "abusive",
+  "turns": [
+   [
+    "person",
+    "一直傳很煩欸 詐騙吧 不要再傳了"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "收到"
+   ],
+   "ends": true,
+   "link": false,
+   "noApology": true,
+   "maxChars": 20
+  }
+ },
+ {
+  "id": "effects",
+  "turns": [
+   [
+    "person",
+    "有幾種特效？"
+   ]
+  ],
+  "expect": {
+   "mentions": [
+    "251"
+   ],
    "maxChars": 90
   }
  }

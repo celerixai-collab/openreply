@@ -95,3 +95,26 @@ export async function pauseAiFor(
 export async function isAiPaused(accountId: string, igsid: string): Promise<boolean> {
   return Boolean(await getRedisConnection().exists(pauseKey(accountId, igsid)));
 }
+
+// A conversation the assistant closed for good: the person bought, or was
+// abusive or fed up. Nothing more goes to them: no reply, no follow-up.
+const ENDED_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+function endedKey(accountId: string, igsid: string): string {
+  return `ai:ended:${accountId}:${igsid}`;
+}
+
+export async function endConversation(accountId: string, igsid: string): Promise<void> {
+  try {
+    await getRedisConnection().set(endedKey(accountId, igsid), String(Date.now()), "EX", ENDED_TTL_SECONDS);
+  } catch (error) {
+    console.warn(
+      "[AI takeover] Could not end the conversation:",
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
+export async function isConversationEnded(accountId: string, igsid: string): Promise<boolean> {
+  return Boolean(await getRedisConnection().exists(endedKey(accountId, igsid)));
+}

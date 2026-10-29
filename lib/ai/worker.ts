@@ -30,8 +30,9 @@ import {
   composeOutgoingText,
 } from "./constants";
 import { writePlaygroundResult, type PlaygroundBrain } from "./playground";
+import { processAiNudge } from "./nudges";
 import { requestDraftSend } from "./drafts";
-import { isAiPaused, isBotSend, pauseAiFor } from "./takeover";
+import { endConversation, isAiPaused, isBotSend, isConversationEnded, pauseAiFor } from "./takeover";
 import { getAnthropicClient, isAiConfigured, type AnthropicMessagesClient } from "./client";
 import {
   classifyAnthropicError,
@@ -45,11 +46,13 @@ import {
   AI_DRAFT_JOB_NAME,
   AI_ECHO_JOB_NAME,
   AI_PLAYGROUND_JOB_NAME,
+  AI_NUDGE_JOB_NAME,
   AI_QUEUE_NAME,
   SEND_AI_DRAFT_JOB_NAME,
   type AiDraftJob,
   type AiEchoJob,
   type AiPlaygroundJob,
+  type AiNudgeJob,
   type AiQueueJob,
   type SendAiDraftJob,
 } from "./queue";
@@ -81,6 +84,7 @@ export type DraftOutcome =
   | "answered"
   | "capped"
   | "paused"
+  | "ended"
   | "created"
   | "sent"
   | "failed";
@@ -211,6 +215,12 @@ export async function processAiDraft(
     return "capped";
   }
 
+  // The assistant closed this conversation (they bought, or were abusive).
+  if (await isConversationEnded(account.id, igsid)) {
+    await clearBurstThrough(account.id, igsid, burst, messageId);
+    return "ended";
+  }
+
   // The creator took this conversation over: stay out until the pause ends.
   if (await isAiPaused(account.id, igsid)) {
     console.log(`[AI Worker] Paused for a person on account ${account.id}: the creator replied`);
@@ -315,6 +325,15 @@ export async function processAiDraft(
     }
     await clearBurstThrough(account.id, igsid, burst, messageId);
     return "failed";
+  }
+
+  // Closing for good: a last reply may still go out below, then nothing more.
+  if (draft.endConversation) {
+    await endConversation(account.id, igsid);
+    if (!draft.replyText) {
+      await clearBurstThrough(account.id, igsid, burst, messageId);
+      return "ended";
+    }
   }
 
   const now = new Date();
@@ -555,6 +574,7 @@ export async function processAiPlayground(
       knowledgeGap: draft.knowledgeGap,
       gapQuestion: draft.gapQuestion,
       usedTopics: draft.usedTopics,
+      endsConversation: draft.endConversation,
       outgoingText: composeOutgoingText(draft.replyText, disclosureText, firstReply),
       wouldAutoSend:
         assistant?.mode === AI_MODE_AUTO && !draft.needsHuman && Boolean(draft.replyText),
@@ -585,6 +605,10 @@ export async function processAiJob(
   }
   if (job.name === AI_PLAYGROUND_JOB_NAME) {
     await processAiPlayground(job as Job<AiPlaygroundJob>, deps);
+    return;
+  }
+  if (job.name === AI_NUDGE_JOB_NAME) {
+    await processAiNudge(job.data as AiNudgeJob);
   }
 }
 

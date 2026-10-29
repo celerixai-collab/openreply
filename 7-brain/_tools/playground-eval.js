@@ -27,6 +27,9 @@ const CHECKS = {
   lang: (r, lang) =>
     (r.language ?? "").toLowerCase().startsWith(lang) && (lang !== "en" || !/\p{Script=Han}/u.test(r.replyText)),
   intent: (r, intent) => r.intent === intent,
+  silent: (r, want) => (r.replyText === "") === want,
+  ends: (r, want) => Boolean(r.endsConversation) === want,
+  noApology: (r, want) => !want || !/抱歉|不好意思|對不起|sorry/i.test(r.replyText),
   // "沒辦法保證" is the right answer, so negated forms do not count.
   noGuarantee: (r, want) =>
     !want || !/保證|一定會|guarantee/i.test(r.outgoingText.replace(/(沒辦法|無法|不能|不會|不敢)(跟你)?保證|can'?t guarantee|cannot guarantee/gi, "")),

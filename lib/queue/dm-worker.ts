@@ -15,6 +15,7 @@ import {
 } from "./comment-delivery";
 import { createHash } from "node:crypto";
 import { deliverOwedLaunchLink } from "@/lib/launch/owed-link";
+import { scheduleNudgesAfterMessage } from "@/lib/ai/nudges";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getDMQueue,
@@ -1581,6 +1582,8 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     instagramAccountId: job.data.instagramAccountId,
     userId: job.data.senderId,
   });
+  // The AI's nudges start over from this message (only when switched on).
+  await scheduleNudgesAfterMessage(job.data.instagramAccountId, job.data.senderId);
   // Any message opens Instagram's 24-hour window: the campaign follow-up goes
   // out once the conversation has been quiet for its delay.
   try {
