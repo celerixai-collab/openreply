@@ -25,6 +25,7 @@ import {
   getDripSettings,
   setDripSettings,
 } from "@/lib/launch/launch-drip";
+import { getOwedSettings, setOwedSettings } from "@/lib/launch/owed-link";
 
 /**
  * One-off launch announcement to everyone who ever commented on a
@@ -36,7 +37,7 @@ const bodySchema = z.object({
   // "dm": the announcement DM with a link button. "reply": a public reply under
   // the person's latest comment that asks them to answer with the keyword, which
   // re-opens the messaging window for the campaign's own DM.
-  mode: z.enum(["dm", "reply", "drip", "recent"]).default("dm"),
+  mode: z.enum(["dm", "reply", "drip", "recent", "owed"]).default("dm"),
   text: z.string().max(600).default(""),
   buttonTitle: z.string().max(20).default(""),
   url: z.string().url().optional(),
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
   const drip = await getDripSettings();
   const { campaigns, people, gotLink } = await findLaunchAudience(workspaceId, {
     realCommentsOnly: mode !== "dm",
-    launchAt: launchAt ?? drip.launchAt,
+    launchAt: launchAt ?? (mode === "owed" ? (await getOwedSettings()).launchAt : drip.launchAt),
   });
   if (campaigns.length === 0) {
     return NextResponse.json({ success: false, error: "No A–F campaigns found" }, { status: 404 });
@@ -113,6 +114,39 @@ export async function POST(request: NextRequest) {
         replied: replied.size,
         left: left.length,
         next: left.slice(0, 5).map((p) => p.commenterName ?? p.commenterId),
+      },
+    });
+  }
+
+  if (mode === "owed") {
+    // Switch the owed-link delivery on or off and report who is still owed.
+    const current = await getOwedSettings();
+    if (parsed.data.enabled !== undefined) {
+      const nextText = text || current.text;
+      const nextUrl = url ?? current.url;
+      const nextLaunchAt = launchAt ?? current.launchAt;
+      if (parsed.data.enabled && (!nextText || !nextUrl || !nextLaunchAt)) {
+        return NextResponse.json({ success: false, error: "owed needs text, url and launchAt the first time" }, { status: 400 });
+      }
+      await setOwedSettings({
+        enabled: parsed.data.enabled,
+        text: nextText,
+        buttonTitle: buttonTitle || current.buttonTitle,
+        url: nextUrl,
+        launchAt: nextLaunchAt ?? new Date(),
+      });
+    }
+    const now = await getOwedSettings();
+    return NextResponse.json({
+      success: true,
+      data: {
+        enabled: now.enabled,
+        text: now.text,
+        buttonTitle: now.buttonTitle,
+        url: now.url,
+        launchAt: now.launchAt?.toISOString() ?? null,
+        uniquePeople: people.length,
+        stillOwed: people.filter((p) => !gotLink.has(p.commenterId)).length,
       },
     });
   }

@@ -14,6 +14,7 @@ import {
   SCHEDULED_RETRY_MARK,
 } from "./comment-delivery";
 import { createHash } from "node:crypto";
+import { deliverOwedLaunchLink } from "@/lib/launch/owed-link";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getDMQueue,
@@ -317,6 +318,23 @@ function connectionScope(data: DmQueueJob) {
 }
 
 async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
+  await runCommentCampaigns(job);
+  // No campaign logged this comment, so its one private reply is still free:
+  // an A–F commenter still owed the launch link gets it on that comment.
+  const handled = await prisma.dmLog.findFirst({
+    where: { commentId: job.data.commentId },
+    select: { id: true },
+  });
+  if (!handled) {
+    await deliverOwedLaunchLink({
+      instagramAccountId: job.data.instagramAccountId,
+      userId: job.data.commenterId,
+      commentId: job.data.commentId,
+    });
+  }
+}
+
+async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
   const {
     instagramAccountId,
     commentId,
@@ -1558,6 +1576,11 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   await answerMessage(job);
+  // A DM or story reply opens the 24-hour window: send the launch link if owed.
+  await deliverOwedLaunchLink({
+    instagramAccountId: job.data.instagramAccountId,
+    userId: job.data.senderId,
+  });
   // Any message opens Instagram's 24-hour window: the campaign follow-up goes
   // out once the conversation has been quiet for its delay.
   try {
