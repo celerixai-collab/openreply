@@ -19,7 +19,7 @@ vi.mock("@/lib/queue/client", () => ({
   FOLLOWUP_JOB_NAME: "process-followup",
 }));
 
-import { followUpBlockedReason, scheduleFollowUp } from "../lib/queue/followup";
+import { followUpBlockedReason, pickFollowUpMessage, scheduleFollowUp } from "../lib/queue/followup";
 
 const campaign = {
   id: "auto_a",
@@ -96,5 +96,25 @@ describe("followUpBlockedReason", () => {
     expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toMatch(/joined/);
     mockPrisma.aiDraft.findFirst.mockResolvedValue({ intent: "declined" });
     expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toMatch(/declined/);
+  });
+});
+
+describe("pickFollowUpMessage", () => {
+  const variants = "剪輯系統上線了 🎬 你開始用了嗎？\n---\n你還在等什麼呢？🙌\n---\n不要再等了 🔥\n---\n趕快開始上課吧 ✨";
+
+  it("keeps a single follow-up message as it is", () => {
+    expect(pickFollowUpMessage("還有想問的嗎？🙌", "fan_1")).toBe("還有想問的嗎？🙌");
+  });
+
+  it("gives each person one of the variants, the same one every time", () => {
+    const options = variants.split("\n---\n");
+    const picked = pickFollowUpMessage(variants, "fan_1");
+    expect(options).toContain(picked);
+    expect(pickFollowUpMessage(variants, "fan_1")).toBe(picked);
+  });
+
+  it("spreads people across the variants", () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => pickFollowUpMessage(variants, `fan_${i}`)));
+    expect(seen.size).toBe(4);
   });
 });

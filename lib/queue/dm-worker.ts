@@ -95,6 +95,7 @@ import {
   followUpBlockedReason,
   scheduleFollowUp,
   scheduleFollowUpAfterMessage,
+  pickFollowUpMessage,
 } from "@/lib/queue/followup";
 
 const BACKOFF_DELAYS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000];
@@ -1554,7 +1555,7 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
       instagramAccountId: automation.instagramAccount.instagramId,
       userId: userId,
       message: renderMessageWithoutLink({
-        message: automation.followUpMessage,
+        message: pickFollowUpMessage(automation.followUpMessage, userId),
         commenterName: commenterName ?? null,
       }),
     });

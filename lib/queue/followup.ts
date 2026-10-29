@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { isAiPaused, isConversationEnded } from "@/lib/ai/takeover";
 import { FOLLOWUP_JOB_NAME, getDMQueue } from "@/lib/queue/client";
@@ -162,4 +163,19 @@ export async function followUpBlockedReason(
     return `they ${lastDraft.intent === "declined" ? "declined" : "already joined"}`;
   }
   return null;
+}
+
+/**
+ * A follow-up can hold several versions separated by a line of dashes; each
+ * person gets one of them, always the same one, so the reminders do not all
+ * read alike.
+ */
+export function pickFollowUpMessage(message: string, userId: string): string {
+  const variants = message
+    .split(/\n-{3,}\n/)
+    .map((variant) => variant.trim())
+    .filter(Boolean);
+  if (variants.length <= 1) return message;
+  const hash = createHash("sha256").update(userId).digest();
+  return variants[hash.readUInt32BE(0) % variants.length];
 }
