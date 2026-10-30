@@ -5,8 +5,9 @@
  * last message) would close. Every message they send starts the series over.
  *
  * Off unless switched on for the account; it only runs while the assistant
- * itself is on, respects its test list, and skips conversations the creator
- * took over or the assistant ended (they bought, or were abusive).
+ * itself is on, respects its test list and campaign scope, and skips
+ * conversations the creator took over or the assistant ended (they bought,
+ * or were abusive).
  */
 
 import { prisma } from "@/lib/db/client";
@@ -15,6 +16,7 @@ import { sendDirectMessage } from "@/lib/instagram/send-messages";
 import { getRedisConnection } from "@/lib/queue/client";
 import { AI_NUDGE_JOB_NAME, getAiQueue, type AiNudgeJob } from "./queue";
 import { isAiPaused, isConversationEnded } from "./takeover";
+import { inAssistantScope } from "./trigger";
 
 export const NUDGE_LIMITS = { messages: 6, messageLength: 300, minHours: 1, maxHours: 23 } as const;
 // Instagram's window is 24 hours; the last nudge must leave room to deliver.
@@ -66,12 +68,13 @@ export async function scheduleNudgesAfterMessage(instagramId: string, igsid: str
   try {
     const account = await prisma.instagramAccount.findFirst({
       where: { instagramId, provider: "META" },
-      select: { id: true, aiAssistant: { select: { enabled: true } } },
+      select: { id: true, aiAssistant: { select: { enabled: true, campaignIds: true } } },
     });
     if (!account?.aiAssistant?.enabled) return;
     const settings = await getNudgeSettings(account.id);
     const [first] = nudgeDelays(settings.intervalHours, settings.messages.length);
     if (!settings.enabled || first === undefined) return;
+    if (!(await inAssistantScope(account.aiAssistant.campaignIds ?? [], igsid))) return;
 
     const since = Date.now();
     await getRedisConnection().set(quietSinceKey(account.id, igsid), String(since), "PX", WINDOW_MS);
@@ -99,9 +102,10 @@ async function nudgeBlockedReason(job: AiNudgeJob, settings: NudgeSettings): Pro
 
   const assistant = await prisma.aiAssistant.findUnique({
     where: { instagramAccountId: accountId },
-    select: { enabled: true, testUsernames: true },
+    select: { enabled: true, testUsernames: true, campaignIds: true },
   });
   if (!assistant?.enabled) return "the assistant is off";
+  if (!(await inAssistantScope(assistant.campaignIds ?? [], igsid))) return "not from the assistant's campaigns";
   if (assistant.testUsernames.length > 0) {
     const contact = await prisma.contact.findFirst({
       where: { instagramAccountId: accountId, igsid },

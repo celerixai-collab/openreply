@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
       aiAssistant: { findUnique: vi.fn() },
       contact: { findFirst: vi.fn() },
       aiDraft: { findFirst: vi.fn() },
+      dmLog: { findFirst: vi.fn() },
     },
     queueAdd: vi.fn(),
     send: vi.fn(),
@@ -121,6 +122,39 @@ describe("nudges", () => {
     const since = Date.now() - 24 * HOUR;
     h.keys.set("ai:nudge-since:acct_1:fan_1", String(since));
     await expect(processAiNudge({ accountId: "acct_1", igsid: "fan_1", since, step: 3 })).resolves.toBe("skipped");
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("nudges limited to the AI's campaigns", () => {
+  beforeEach(() => {
+    h.prisma.instagramAccount.findFirst.mockResolvedValue({
+      id: "acct_1",
+      aiAssistant: { enabled: true, campaignIds: ["camp_a"] },
+    });
+    h.prisma.aiAssistant.findUnique.mockResolvedValue({ enabled: true, testUsernames: [], campaignIds: ["camp_a"] });
+  });
+
+  it("does not schedule nudges for someone those campaigns never sent a DM to", async () => {
+    h.prisma.dmLog.findFirst.mockResolvedValue(null);
+    await scheduleNudgesAfterMessage("ig_1", "stranger");
+    expect(h.queueAdd).not.toHaveBeenCalled();
+    expect(h.prisma.dmLog.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { automationId: { in: ["camp_a"] }, commenterId: "stranger" } })
+    );
+  });
+
+  it("schedules nudges for someone who commented on one of them", async () => {
+    h.prisma.dmLog.findFirst.mockResolvedValue({ id: "log_1" });
+    await scheduleNudgesAfterMessage("ig_1", "fan_1");
+    expect(h.queueAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops an already queued nudge for someone outside them", async () => {
+    const since = Date.now() - 5 * HOUR;
+    h.keys.set("ai:nudge-since:acct_1:stranger", String(since));
+    h.prisma.dmLog.findFirst.mockResolvedValue(null);
+    await expect(processAiNudge({ accountId: "acct_1", igsid: "stranger", since, step: 0 })).resolves.toBe("skipped");
     expect(h.send).not.toHaveBeenCalled();
   });
 });

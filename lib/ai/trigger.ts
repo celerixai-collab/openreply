@@ -70,6 +70,19 @@ const ATTACHMENT_LABELS: Record<string, string> = {
   like_heart: "傳了一個愛心",
 };
 
+/**
+ * Whether the assistant may talk to this person: with campaigns chosen, only
+ * people one of them sent a DM to (no campaigns chosen: everyone).
+ */
+export async function inAssistantScope(campaignIds: string[], igsid: string): Promise<boolean> {
+  if (campaignIds.length === 0) return true;
+  const reached = await prisma.dmLog.findFirst({
+    where: { automationId: { in: campaignIds }, commenterId: igsid },
+    select: { id: true },
+  });
+  return Boolean(reached);
+}
+
 /** What a message without text was, as a line the AI can answer. */
 export function describeAttachment(type: string | undefined): string {
   if (!type) return "";
@@ -111,14 +124,7 @@ export async function maybeEnqueueAiDraft(
     if (!username || !testUsernames.includes(username)) return false;
   }
   // Limited to some campaigns: only people one of them sent a DM to.
-  const campaignIds = account.aiAssistant.campaignIds ?? [];
-  if (campaignIds.length > 0) {
-    const reached = await prisma.dmLog.findFirst({
-      where: { automationId: { in: campaignIds }, commenterId: message.senderId },
-      select: { id: true },
-    });
-    if (!reached) return false;
-  }
+  if (!(await inAssistantScope(account.aiAssistant.campaignIds ?? [], message.senderId))) return false;
 
   // A Meta redelivery of a message that already has a draft: its job id is
   // retained, so BullMQ would ignore the add, but the message must not be
