@@ -21,9 +21,10 @@ the token expired on 2026-10-31. Followers were only recorded on days someone op
 the page, which is what gave it away. Do not move daily work back there.
 
 Railway is the one scheduler, and GitHub watches it from outside. A failed Uptime run
-makes GitHub email the owner; this was tested on 2026-11-02. The schedule avoids minutes 0
-and 30: on those it produced no run at all in its first 2.5 hours, and GitHub says runs at
-busy times may be dropped.
+makes GitHub email the owner; this was tested on 2026-11-02. GitHub has not started a single
+scheduled run yet: none at minutes 0 and 30 in the first 2.5 hours, and none since moving to
+minutes 17 and 47. Only manual runs have happened, so do not count on this check until a
+`schedule` run shows up in the workflow's history.
 
 ## Sending speed
 
@@ -50,6 +51,11 @@ error code, and the worker logs `[API usage, last 10 min]`, with what the calls 
 and the usage Instagram reports. The app usage it reports stayed at 0 while DMs were
 being throttled, so this limit is not the app's call allowance. `[code=...]` in an error
 says which limit it was: code 4 on public replies is `Application request limit reached`.
+
+`The requested user cannot be found` (`sub=2534014`) is a real refusal, not the throttle in
+disguise. On 2026-11-02, 37 comments refused this way were retried with nothing throttled,
+and all 37 were refused again. For 30 of the 36 that were checked, the public reply also
+failed because the comment no longer exists. Leave these as failed.
 
 A new `DM_PACE_PER_MINUTE` reaches comments already waiting at the worker's next start
 (`respaceWaitingComments`), which also reorders them: near the 7-day deadline first, then
