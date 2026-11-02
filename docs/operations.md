@@ -47,7 +47,8 @@ being throttled, so this limit is not the app's call allowance. `[code=...]` in 
 says which limit it was: code 4 on public replies is `Application request limit reached`.
 
 A new `DM_PACE_PER_MINUTE` reaches comments already waiting at the worker's next start
-(`respaceWaitingComments`). The backlog waits in order: each comment gets a sending time one spacing apart (`reservePaceSlot`),
+(`respaceWaitingComments`), which also reorders them: near the 7-day deadline first, then
+people who already saw the public reply, then the newest. Each comment gets a sending time one spacing apart (`reservePaceSlot`),
 with a minimum gap under it so a lowered pace also applies to jobs already waiting. The
 DM does not wait for the public reply, but the reply waits for the DM's turn: it tells
 people to check their inbox, so it must never go out while their DM is still in line.

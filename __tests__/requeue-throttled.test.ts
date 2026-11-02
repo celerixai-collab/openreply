@@ -69,21 +69,48 @@ describe("respaceWaitingComments", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     getDelayed.mockReset();
+    prismaMock.dmLog.findMany.mockReset().mockResolvedValue([]);
     restartPaceLine.mockReset().mockResolvedValue([NOW + 10_000, NOW + 20_000]);
   });
 
-  it("gives waiting comments new sending times at the current pace, oldest place first", async () => {
-    const second = waiting("b", NOW + 7_000_000);
-    const first = waiting("a", NOW + 3_000_000);
-    getDelayed.mockResolvedValue([second, first]);
+  it("gives waiting comments new sending times at the current pace", async () => {
+    const a = waiting("a", NOW + 3_000_000);
+    const b = waiting("b", NOW + 7_000_000);
+    getDelayed.mockResolvedValue([a, b]);
+    prismaMock.dmLog.findMany.mockResolvedValue([
+      { commentId: "a", createdAt: new Date(NOW - 3_600_000), publicReplySentAt: null },
+      { commentId: "b", createdAt: new Date(NOW - 60_000), publicReplySentAt: null },
+    ]);
 
     await expect(respaceWaitingComments()).resolves.toBe(2);
 
     expect(restartPaceLine).toHaveBeenCalledWith("ig", 2);
-    expect(first.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "a", paceSlotAt: NOW + 10_000 }));
-    expect(first.changeDelay).toHaveBeenCalledWith(10_000);
-    expect(second.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "b", paceSlotAt: NOW + 20_000 }));
-    expect(second.changeDelay).toHaveBeenCalledWith(20_000);
+    expect(b.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "b", paceSlotAt: NOW + 10_000 }));
+    expect(b.changeDelay).toHaveBeenCalledWith(10_000);
+    expect(a.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "a", paceSlotAt: NOW + 20_000 }));
+    expect(a.changeDelay).toHaveBeenCalledWith(20_000);
+  });
+
+  it("sends near the deadline first, then people already told to check their inbox, then the newest", async () => {
+    const day = 24 * 3_600_000;
+    restartPaceLine.mockResolvedValue([NOW + 10_000, NOW + 20_000, NOW + 30_000, NOW + 40_000, NOW + 50_000]);
+    const jobs = ["old", "oldest", "replied", "newer", "newest"].map((id) => waiting(id, NOW + 1000));
+    getDelayed.mockResolvedValue(jobs);
+    prismaMock.dmLog.findMany.mockResolvedValue([
+      { commentId: "old", createdAt: new Date(NOW - 5.5 * day), publicReplySentAt: null },
+      { commentId: "oldest", createdAt: new Date(NOW - 6 * day), publicReplySentAt: null },
+      { commentId: "replied", createdAt: new Date(NOW - 3 * day), publicReplySentAt: new Date(NOW) },
+      { commentId: "newer", createdAt: new Date(NOW - 2 * day), publicReplySentAt: null },
+      { commentId: "newest", createdAt: new Date(NOW - day), publicReplySentAt: null },
+    ]);
+
+    await respaceWaitingComments();
+
+    const order = jobs
+      .map((job) => [job.data.commentId, (job.changeDelay.mock.calls[0] as unknown as number[])[0]] as const)
+      .sort((a, b) => a[1] - b[1])
+      .map(([id]) => id);
+    expect(order).toEqual(["oldest", "old", "replied", "newest", "newer"]);
   });
 
   it("leaves new comments, reply retries and jobs without a place alone", async () => {
@@ -101,6 +128,7 @@ describe("respaceWaitingComments", () => {
   });
 
   it("carries on when a job started running in the meantime", async () => {
+    prismaMock.dmLog.findMany.mockResolvedValue([]);
     const started = waiting("a", NOW + 1000);
     started.changeDelay.mockRejectedValue(new Error("not delayed"));
     const next = waiting("b", NOW + 2000);

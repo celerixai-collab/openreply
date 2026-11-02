@@ -241,10 +241,14 @@ export async function removeDuplicateDelayedComments(): Promise<number> {
   return removed;
 }
 
+// A comment this close to Instagram's 7 days goes ahead of everything.
+const DEADLINE_CLOSE_MS = 5 * 24 * 60 * 60 * 1000;
+
 /**
  * Run at every start: sending times are handed out when a comment joins the line,
  * so without this a changed DM_PACE_PER_MINUTE would not reach the comments
- * already waiting. Oldest place first.
+ * already waiting. Comments near the deadline go first, then people already told
+ * to check their inbox, then the newest: they are the ones still waiting for it.
  */
 export async function respaceWaitingComments(): Promise<number> {
   const jobs = await getDMQueue().getDelayed(0, -1);
@@ -264,8 +268,23 @@ export async function respaceWaitingComments(): Promise<number> {
     lines.set(job.data.instagramAccountId, line);
   }
   let moved = 0;
+  const now = Date.now();
   for (const [instagramAccountId, line] of lines) {
-    line.sort((a, b) => ("paceSlotAt" in a.data && "paceSlotAt" in b.data ? a.data.paceSlotAt! - b.data.paceSlotAt! : 0));
+    const rows = await prisma.dmLog.findMany({
+      where: { commentId: { in: line.map((job) => ("commentId" in job.data ? job.data.commentId : "")) } },
+      select: { commentId: true, createdAt: true, publicReplySentAt: true },
+    });
+    const byComment = new Map(rows.map((row) => [row.commentId, row]));
+    const placeOf = (job: (typeof line)[number]) => {
+      const row = byComment.get("commentId" in job.data ? job.data.commentId : "");
+      const age = now - (row?.createdAt.getTime() ?? now);
+      return [age > DEADLINE_CLOSE_MS ? 0 : row?.publicReplySentAt ? 1 : 2, age];
+    };
+    line.sort((a, b) => {
+      const [groupA, ageA] = placeOf(a);
+      const [groupB, ageB] = placeOf(b);
+      return groupA - groupB || (groupA === 0 ? ageB - ageA : ageA - ageB);
+    });
     const times = await restartPaceLine(instagramAccountId, line.length);
     for (const [i, job] of line.entries()) {
       try {
