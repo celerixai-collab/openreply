@@ -1,0 +1,32 @@
+name: Uptime
+
+# Checks the system from outside it: the app's own alerts cannot report the app
+# being down. A failed run makes GitHub email the repository owner.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check /api/health, allowing for a deploy in progress
+        run: |
+          for attempt in 1 2 3; do
+            body=$(curl -sS --max-time 30 https://openreply-coral-three.vercel.app/api/health || true)
+            echo "$body"
+            [ "$(echo "$body" | jq -r .status 2>/dev/null)" = "ok" ] && exit 0
+            sleep 60
+          done
+          exit 1
+      - name: Keep this schedule alive
+        # GitHub stops a scheduled workflow after 60 days without a commit.
+        if: always()
+        run: gh workflow enable uptime.yml --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
