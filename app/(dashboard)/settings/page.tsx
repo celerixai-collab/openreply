@@ -51,6 +51,7 @@ interface WorkspaceMembersData {
 
 export default function SettingsPage() {
   const { t, label, locale } = useI18n();
+  const [openedAt] = useState(() => Date.now());
   const [data, setData] = useState<SettingsData | null>(null);
   const [membersData, setMembersData] = useState<WorkspaceMembersData | null>(
     null
@@ -128,7 +129,6 @@ export default function SettingsPage() {
   }
 
   const accounts = data?.instagramAccounts ?? [];
-  const [openedAt] = useState(() => Date.now());
   const tokenExpired = accounts.some(
     (account) => account.tokenExpiresAt && new Date(account.tokenExpiresAt).getTime() < openedAt
   );
