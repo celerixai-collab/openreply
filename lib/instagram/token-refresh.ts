@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/db/client";
 import { decryptToken, encryptToken } from "@/lib/meta/oauth";
 import { refreshLongLivedToken } from "@/lib/meta/client";
+import { clearTokenInvalid } from "@/lib/queue/token-pause";
 
-const DAYS_BEFORE_EXPIRY = 10;
+// Instagram extends a token that is at least a day old by another 60 days, with
+// no login. Renewing every couple of days keeps it near 60 days left, so a
+// renewal that stops working is noticed about two months before anything breaks.
+const RENEW_WHEN_DAYS_LEFT = 58;
 
 export type TokenRefreshResult = {
   instagramAccountId: string;
@@ -12,13 +16,13 @@ export type TokenRefreshResult = {
 };
 
 /**
- * Renew every Instagram token within 10 days of expiring. Called by the cron
+ * Renew Instagram tokens that are a couple of days old. Called by the cron
  * route and by the worker: a token that runs out stops every campaign, so this
  * must not depend on one scheduler alone.
  */
 export async function refreshExpiringTokens(): Promise<TokenRefreshResult[]> {
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() + DAYS_BEFORE_EXPIRY);
+  cutoffDate.setDate(cutoffDate.getDate() + RENEW_WHEN_DAYS_LEFT);
 
   const accountsToRefresh = await prisma.instagramAccount.findMany({
     where: {
@@ -33,6 +37,7 @@ export async function refreshExpiringTokens(): Promise<TokenRefreshResult[]> {
       id: true,
       workspaceId: true,
       username: true,
+      instagramId: true,
       accessToken: true,
     },
   });
@@ -54,6 +59,8 @@ export async function refreshExpiringTokens(): Promise<TokenRefreshResult[]> {
           tokenExpiresAt: newExpiry,
         },
       });
+
+      await clearTokenInvalid(account.instagramId);
 
       results.push({
         instagramAccountId: account.id,

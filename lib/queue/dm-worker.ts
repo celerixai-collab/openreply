@@ -15,8 +15,9 @@ import {
 } from "./comment-delivery";
 import { createHash } from "node:crypto";
 import { deliverOwedLaunchLink } from "@/lib/launch/owed-link";
+import { isTokenInvalid, markTokenInvalid, TOKEN_PAUSE_RECHECK_MS } from "@/lib/queue/token-pause";
 import { scheduleNudgesAfterMessage } from "@/lib/ai/nudges";
-import { UnrecoverableError, Worker, type Job } from "bullmq";
+import { DelayedError, UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getDMQueue,
   getRedisConnection,
@@ -981,6 +982,21 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
           `[DM Worker] Instagram throttled a private reply; retry ${throttleRetry + 1} in ${Math.round(delay / 60_000)} min${tripped ? " (account cooling down)" : ""}`
         );
         continue;
+      }
+      // Instagram refused the token: nothing was sent, and this says nothing
+      // about the comment. Give the attempt back; processJob holds the job
+      // until the token works again.
+      if (!delivered && sendError instanceof TokenExpiredError) {
+        await prisma.dmLog.update({
+          where: { automationId_commentId: { automationId: automation.id, commentId } },
+          data: {
+            status: "PENDING",
+            attempts: { decrement: 1 },
+            dmDeliveryUnconfirmed: false,
+            errorMessage: `${SCHEDULED_RETRY_MARK} waiting for the Instagram token: ${formatError(sendError)}`.slice(0, 1000),
+          },
+        });
+        throw sendError;
       }
       // Window closed, person gone, comment deleted: final. Use up the attempts
       // so the reconciler stops re-queueing it, and don't let BullMQ retry it.
@@ -1975,10 +1991,23 @@ async function dispatchJob(job: Job<DmQueueJob>): Promise<void> {
   return processComment(job as Job<ProcessCommentJob>);
 }
 
-async function processJob(job: Job<DmQueueJob>): Promise<void> {
+async function holdForToken(job: Job<DmQueueJob>, token?: string): Promise<never> {
+  await job.moveToDelayed(Date.now() + TOKEN_PAUSE_RECHECK_MS, token);
+  throw new DelayedError();
+}
+
+async function processJob(job: Job<DmQueueJob>, token?: string): Promise<void> {
+  const instagramAccountId = job.data.instagramAccountId;
+  if (await isTokenInvalid(instagramAccountId).catch(() => false)) {
+    return holdForToken(job, token);
+  }
   try {
     await dispatchJob(job);
   } catch (error) {
+    if (error instanceof TokenExpiredError) {
+      await markTokenInvalid(instagramAccountId);
+      return holdForToken(job, token);
+    }
     // formatError() takes unknown; isDeliveryUnconfirmed() is a type guard on
     // Error subclasses, but keep using formatError() for a consistent message
     // format across every UnrecoverableError thrown from this worker.
@@ -2011,6 +2040,8 @@ async function recordWorkerFailure(
         message: `DM worker job ${job?.id ?? "unknown"} failed: ${error.message}`,
         payload: {
           jobId: job?.id ?? null,
+          jobName: job?.name ?? null,
+          userId: job && "userId" in job.data ? job.data.userId : null,
           attemptsMade: job?.attemptsMade ?? null,
           instagramAccountId: instagramAccountId ?? null,
           commentId,

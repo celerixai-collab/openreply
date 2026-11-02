@@ -166,10 +166,20 @@ vi.mock("bullmq", () => {
     UnrecoverableError: class UnrecoverableError extends Error {
       name = "UnrecoverableError";
     },
+    DelayedError: class DelayedError extends Error {
+      name = "DelayedError";
+    },
   };
 });
 
-import { MetaApiError, RateLimitError } from "@/lib/meta/client";
+const tokenPause = vi.hoisted(() => ({
+  isTokenInvalid: vi.fn(async () => false),
+  markTokenInvalid: vi.fn(async () => undefined),
+  TOKEN_PAUSE_RECHECK_MS: 600_000,
+}));
+vi.mock("@/lib/queue/token-pause", () => tokenPause);
+
+import { MetaApiError, RateLimitError, TokenExpiredError } from "@/lib/meta/client";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
@@ -3298,5 +3308,40 @@ describe("DM Worker — email gate", () => {
       expect(contacts[0].emailOptedOutAt).toBeNull();
       expect(directTexts()).not.toContain(DEFAULT_EMAIL_OPT_OUT_MESSAGE);
     });
+  });
+});
+
+describe("DM Worker — Instagram refuses the token", () => {
+  type Run = (job: unknown, token: string) => Promise<void>;
+
+  it("gives the attempt back and holds the job instead of failing it", async () => {
+    const processor = getProcessor() as unknown as Run;
+    mockSendPrivateReply.mockRejectedValueOnce(new TokenExpiredError("Session has expired"));
+    const job = { ...createMockJob(mockJobData), moveToDelayed: vi.fn() };
+
+    await expect(processor(job, "lock")).rejects.toMatchObject({ name: "DelayedError" });
+
+    expect(tokenPause.markTokenInvalid).toHaveBeenCalledWith("ig_456");
+    expect(job.moveToDelayed).toHaveBeenCalledWith(expect.any(Number), "lock");
+    const updates = mockPrisma.dmLog.update.mock.calls.map((call: unknown[]) => call[0]);
+    expect(updates).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "PENDING", attempts: { decrement: 1 } }),
+      })
+    );
+    expect(updates).not.toContainEqual(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+  });
+
+  it("sends nothing while the account is paused", async () => {
+    const processor = getProcessor() as unknown as Run;
+    tokenPause.isTokenInvalid.mockResolvedValueOnce(true);
+    const job = { ...createMockJob(mockJobData), moveToDelayed: vi.fn() };
+
+    await expect(processor(job, "lock")).rejects.toMatchObject({ name: "DelayedError" });
+
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(job.moveToDelayed).toHaveBeenCalled();
   });
 });

@@ -25,10 +25,11 @@
  * filter on the account to widen results.
  */
 
-import { failedOnExpiredToken, MAX_COMMENT_SEND_ATTEMPTS, publicReplyGaveUp, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { MAX_COMMENT_SEND_ATTEMPTS, publicReplyGaveUp, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 import { hasLegacyUnconfirmedDelivery } from "@/lib/instagram/delivery-errors";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
+import { isTokenInvalid } from "@/lib/queue/token-pause";
 import {
   getRecentMediaComments,
   getUserMedia,
@@ -204,7 +205,9 @@ async function sweepCampaign({
   let accessToken = tokenCache.get(account.id);
   if (accessToken === undefined) {
     try {
-      accessToken = await createInstagramContext(account);
+      accessToken = (await isTokenInvalid(account.instagramId).catch(() => false))
+        ? null
+        : await createInstagramContext(account);
     } catch {
       accessToken = null;
     }
@@ -356,7 +359,6 @@ async function sweepCampaign({
       },
     });
     const handledSet = new Set(logs.filter((log) => {
-      if (log.status === "FAILED" && failedOnExpiredToken(log.errorMessage)) return true;
       // SKIPPED_DEDUP: the person (or this comment, through another
       // campaign) already got the DM; sweeping it again would only take a
       // slot from someone still waiting.

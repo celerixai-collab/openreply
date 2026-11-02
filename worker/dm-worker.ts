@@ -6,7 +6,8 @@ import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
-import { runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { ALERT_FAILING_KEY, CRON_LAST_RUN_KEY, runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { getRedisConnection } from "@/lib/queue/client";
 import { alertAuthToken } from "@/lib/ops/alert-email";
 import { getBaseUrl } from "@/lib/env";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
@@ -141,23 +142,38 @@ async function postAlert(body: { ping: true } | { workspaceId: string; issues: S
   });
   if (!response.ok) throw new Error(`Alert endpoint answered ${response.status}`);
 }
+// The outside uptime check reads this, so a broken mail path is noticed too.
+async function noteAlertFailing(failing: boolean): Promise<void> {
+  const redis = getRedisConnection();
+  await (failing ? redis.set(ALERT_FAILING_KEY, "1", "EX", 60 * 60) : redis.del(ALERT_FAILING_KEY)).catch(() => undefined);
+}
 async function systemCheck() {
   try {
     const alerted = await runSystemCheck({
       includeWorker: false,
       deliver: (workspaceId, issues) => postAlert({ workspaceId, issues }),
     });
-    if (alerted > 0) console.log(`[System check] Mailed ${alerted} problem(s) to the owner`);
+    if (alerted > 0) {
+      console.log(`[System check] Mailed ${alerted} problem(s) to the owner`);
+      await noteAlertFailing(false);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[System check] Failed:", message);
+    await noteAlertFailing(true);
   }
 }
 postAlert({ ping: true })
-  .then(() => console.log("[System check] Alert endpoint reachable"))
-  .catch((error) =>
-    console.error("[System check] Alert endpoint not reachable:", error instanceof Error ? error.message : error)
-  );
+  .then(() => {
+    console.log("[System check] Alert endpoint reachable");
+    return noteAlertFailing(false);
+  })
+  .catch((error) => {
+    console.error("[System check] Alert endpoint not reachable:", error instanceof Error ? error.message : error);
+    return noteAlertFailing(true);
+  });
+// The baseline for "the cron is late", so a cron that never runs is noticed too.
+void getRedisConnection().set(CRON_LAST_RUN_KEY, String(Date.now()), "NX").catch(() => undefined);
 setTimeout(() => void systemCheck(), 60_000);
 const systemCheckTimer = setInterval(() => void systemCheck(), SYSTEM_CHECK_INTERVAL_MS);
 

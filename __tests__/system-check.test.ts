@@ -55,12 +55,12 @@ describe("system check", () => {
   });
 
   it("flags DM failures only when they outnumber the sends", async () => {
-    prismaMock.dmLog.count.mockImplementation(async ({ where }: { where: { status: string } }) =>
-      where.status === "FAILED" ? 12 : 50
+    prismaMock.dmLog.count.mockImplementation(async ({ where }: { where: { status: unknown; publicReplySentAt?: unknown } }) =>
+      where.publicReplySentAt ? 0 : where.status === "FAILED" ? 12 : 50
     );
     expect(await checkWorkspace("w1")).toEqual([]);
-    prismaMock.dmLog.count.mockImplementation(async ({ where }: { where: { status: string } }) =>
-      where.status === "FAILED" ? 12 : 2
+    prismaMock.dmLog.count.mockImplementation(async ({ where }: { where: { status: unknown; publicReplySentAt?: unknown } }) =>
+      where.publicReplySentAt ? 0 : where.status === "FAILED" ? 12 : 2
     );
     expect((await checkWorkspace("w1")).map((i) => i.id)).toEqual(["dm-failures"]);
   });
@@ -94,9 +94,41 @@ describe("token refresh failures", () => {
     prismaMock.operationalEvent.findFirst.mockResolvedValue({ message: "old failure" });
     prismaMock.dmLog.count.mockResolvedValue(0);
     prismaMock.webhookEvent.count.mockResolvedValue(0);
+    redisMock.get.mockResolvedValue(null);
     expect(await checkWorkspace("w1")).toEqual([]);
 
     prismaMock.instagramAccount.findMany.mockResolvedValue([account(8)]);
     expect((await checkWorkspace("w1")).map((i) => i.id)).toEqual(["token-refresh-failed"]);
+  });
+});
+
+describe("new checks", () => {
+  beforeEach(() => {
+    prismaMock.instagramAccount.findMany.mockResolvedValue([{ ...account(50), instagramId: "ig1" }]);
+    prismaMock.operationalEvent.findFirst.mockResolvedValue(null);
+    prismaMock.dmLog.count.mockResolvedValue(0);
+    prismaMock.webhookEvent.count.mockResolvedValue(0);
+    queueMock.getJobCounts.mockResolvedValue({ waiting: 0 });
+    redisMock.get.mockResolvedValue(null);
+  });
+
+  it("flags a refused token and Instagram throttling", async () => {
+    redisMock.get.mockImplementation(async (k: string) =>
+      k === "token-invalid:ig1" || k === "cooldown:dm:ig1" ? "1" : null
+    );
+    expect((await checkWorkspace("w1")).map((i) => i.id)).toEqual(["token-rejected:a1", "throttled:a1"]);
+  });
+
+  it("flags comments answered in public whose DM never followed", async () => {
+    prismaMock.dmLog.count.mockImplementation(async ({ where }: { where: { publicReplySentAt?: unknown } }) =>
+      where.publicReplySentAt ? 3 : 0
+    );
+    expect((await checkWorkspace("w1")).map((i) => i.id)).toEqual(["replied-no-dm"]);
+  });
+
+  it("flags a cron that stopped, but not one with no baseline yet", async () => {
+    expect(await checkSystem({ includeWorker: false })).toEqual([]);
+    redisMock.get.mockResolvedValue(String(Date.now() - 27 * 3600_000));
+    expect((await checkSystem({ includeWorker: false })).map((i) => i.id)).toEqual(["cron-late"]);
   });
 });

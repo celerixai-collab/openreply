@@ -620,5 +620,7 @@
   "Would be a draft for you to send": "會變成草稿，等你送出",
   "Would be sent automatically": "會自動送出",
   "Would wait for you:": "會留給你處理：",
-  "Based on:": "根據："
+  "Based on:": "根據：",
+  "{count} comments can still get their DM": "有 {count} 則留言還能補發私訊",
+  "Resend": "補發"
 }

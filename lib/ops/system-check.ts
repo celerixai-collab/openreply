@@ -16,16 +16,21 @@ const WEBHOOK_FAILURE_THRESHOLD = 5;
 const QUEUE_BACKLOG_THRESHOLD = 500;
 // The same problem is mailed again twice a day for as long as it lasts.
 const REPEAT_ALERT_SECONDS = 12 * 60 * 60;
+const REPLIED_NO_DM_AFTER_MS = 2 * HOUR_MS;
+const CRON_LATE_AFTER_MS = 26 * HOUR_MS;
+export const CRON_LAST_RUN_KEY = "ops:cron-last-run";
+export const ALERT_FAILING_KEY = "ops:alert-failing";
 
 /** Everything that can stop campaigns for one workspace, as of now. */
 export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]> {
   const issues: SystemIssue[] = [];
   const now = Date.now();
   const hourAgo = new Date(now - HOUR_MS);
+  const redis = getRedisConnection();
 
   const accounts = await prisma.instagramAccount.findMany({
     where: { workspaceId, provider: "META" },
-    select: { id: true, username: true, tokenExpiresAt: true, webhookSubscribed: true },
+    select: { id: true, instagramId: true, username: true, tokenExpiresAt: true, webhookSubscribed: true },
   });
   for (const account of accounts) {
     const expiresAt = account.tokenExpiresAt?.getTime();
@@ -42,6 +47,20 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
         detail: `到期時間：${new Date(expiresAt).toISOString().slice(0, 10)}。到 Settings 按 Connect using your own Meta app 重新授權，不要按 Disconnect。`,
       });
     }
+    if (await redis.get(`token-invalid:${account.instagramId}`)) {
+      issues.push({
+        id: `token-rejected:${account.id}`,
+        title: `Instagram 拒絕了 @${account.username} 的 token`,
+        detail: "發送已自動暫停，沒有人會被算成失敗。可能改過密碼或移除過授權。到 Settings 按 Connect using your own Meta app 重新授權，連好後會自動接著發。",
+      });
+    }
+    if (await redis.get(`cooldown:dm:${account.instagramId}`)) {
+      issues.push({
+        id: `throttled:${account.id}`,
+        title: `Instagram 正在限制 @${account.username} 的發送速度`,
+        detail: "私訊已自動暫停一段時間再重試。如果常收到這封，代表速度太快，要調低 DM_PACE_PER_MINUTE。",
+      });
+    }
     if (!account.webhookSubscribed) {
       issues.push({
         id: `webhook-off:${account.id}`,
@@ -51,10 +70,10 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
     }
   }
 
-  // A failed renewal only matters while the token is near its end; a reconnect
-  // clears it.
+  // Renewal runs every couple of days, so a token under 45 days left means it
+  // has kept failing; one stray failure, or one from before a reconnect, is not.
   const renewalDue = accounts.some(
-    (a) => a.tokenExpiresAt && a.tokenExpiresAt.getTime() < now + 10 * DAY_MS
+    (a) => a.tokenExpiresAt && a.tokenExpiresAt.getTime() < now + 45 * DAY_MS
   );
   const refreshFailure = renewalDue && await prisma.operationalEvent.findFirst({
     where: {
@@ -99,6 +118,27 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
     });
   }
 
+  // A public reply says the DM is on its way, so one that never follows is the
+  // failure people see first. Refusals nothing can fix are left out.
+  const repliedNoDm = await prisma.dmLog.count({
+    where: {
+      workspaceId,
+      status: { in: ["PENDING", "FAILED"] },
+      publicReplySentAt: { lt: new Date(now - REPLIED_NO_DM_AFTER_MS), gt: new Date(now - 7 * DAY_MS) },
+      NOT: [
+        { errorMessage: { contains: "cannot be found" } },
+        { errorMessage: { contains: "outside of allowed window" } },
+      ],
+    },
+  });
+  if (repliedNoDm > 0) {
+    issues.push({
+      id: "replied-no-dm",
+      title: `有 ${repliedNoDm} 則留言已回覆超過 2 小時，Auto DM 還沒送到`,
+      detail: "到 Diagnostics 頁面查看，或按「補發」。",
+    });
+  }
+
   return issues;
 }
 
@@ -111,6 +151,14 @@ export async function checkSystem({ includeWorker }: { includeWorker: boolean })
       id: "queue-backlog",
       title: `發送佇列塞了 ${counts.waiting} 個工作`,
       detail: "私訊可能會延遲。到 Diagnostics 頁面查看。",
+    });
+  }
+  const cronLastRun = await getRedisConnection().get(CRON_LAST_RUN_KEY);
+  if (cronLastRun && Date.now() - Number(cronLastRun) > CRON_LATE_AFTER_MS) {
+    issues.push({
+      id: "cron-late",
+      title: "Vercel 的每日排程超過一天沒有執行",
+      detail: "Token 更新還有 Railway 在做，但每月計數重置和其他排程會停。到 Vercel 的 Cron Jobs 頁面查看。",
     });
   }
   if (includeWorker && !(await getWorkerHealth()).healthy) {

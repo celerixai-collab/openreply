@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue, getRedisConnection } from "@/lib/queue/client";
 import { getWorkerHealth } from "@/lib/ops/worker-health";
+import { ALERT_FAILING_KEY } from "@/lib/ops/system-check";
 
 export const runtime = "nodejs";
 // Health must reflect live state (worker heartbeat, queue depth), never a
@@ -81,10 +82,11 @@ async function checkQueue(): Promise<HealthCheck & { counts?: unknown }> {
 }
 
 export async function GET() {
-  const [database, redis, queue, worker] = await Promise.all([
+  const [database, redis, queue, alertFailing, worker] = await Promise.all([
     checkDatabase(),
     checkRedis(),
     checkQueue(),
+    getRedisConnection().get(ALERT_FAILING_KEY).catch(() => null),
     getWorkerHealth().catch((error) => ({
       healthy: false,
       heartbeat: null,
@@ -97,6 +99,7 @@ export async function GET() {
     database.status === "ok" &&
     redis.status === "ok" &&
     queue.status === "ok" &&
+    !alertFailing &&
     worker.healthy;
 
   return NextResponse.json(
@@ -107,6 +110,7 @@ export async function GET() {
         redis,
         queue,
         worker,
+        alerts: { status: alertFailing ? "error" : "ok" },
       },
     },
     { status: healthy ? 200 : 503 }

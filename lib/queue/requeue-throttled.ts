@@ -167,6 +167,23 @@ export async function requeueUnconfirmedDms(workspaceId: string): Promise<number
   return count;
 }
 
+/** How many comments the re-queues above would pick up, for the Diagnostics page. */
+export async function countRecoverableComments(workspaceId: string): Promise<number> {
+  return prisma.dmLog.count({
+    where: {
+      workspaceId,
+      status: "FAILED",
+      NOT: { commentId: { startsWith: "reveal:" } },
+      OR: [
+        { errorMessage: { contains: "Session has expired" } },
+        { errorMessage: { contains: "Error validating access token" } },
+        { publicReplySentAt: { not: null }, errorMessage: { contains: "delivery is unconfirmed" } },
+      ],
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+  });
+}
+
 // Instagram's 24-hour window after a button tap, with a margin.
 const TAP_WINDOW_MS = 23 * 60 * 60 * 1000;
 

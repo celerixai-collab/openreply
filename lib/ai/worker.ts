@@ -6,7 +6,9 @@
  * the worker itself, through the same checks as a click in the dashboard.
  */
 
-import { UnrecoverableError, Worker, type Job } from "bullmq";
+import { TokenExpiredError } from "@/lib/meta/client";
+import { isTokenInvalid, markTokenInvalid, TOKEN_PAUSE_RECHECK_MS, TokenPausedError } from "@/lib/queue/token-pause";
+import { DelayedError, UnrecoverableError, Worker, type Job } from "bullmq";
 import { prisma } from "@/lib/db/client";
 import { Prisma } from "@/app/generated/prisma/client";
 import { getRedisConnection } from "@/lib/queue/client";
@@ -418,7 +420,7 @@ export async function processAiEcho(
     data: { status: "SUPERSEDED", decidedAt: new Date() },
   });
   console.log(
-    `[AI Worker] The creator replied by hand on account ${account.id}; AI paused for ${assistant.humanPauseHours}h in that conversation (message ${messageId.slice(-12)}: "${messageText.slice(0, 30)}")`
+    `[AI Worker] The creator replied by hand on account ${account.id}; AI paused for ${assistant.humanPauseHours}h in that conversation (message ${messageId.slice(-12)})`
   );
   return "paused";
 }
@@ -441,6 +443,7 @@ export async function processSendAiDraft(
   if (!draft || draft.status !== "SENDING" || !draft.finalText) return "skipped";
 
   const account = draft.instagramAccount;
+  if (await isTokenInvalid(account.instagramId).catch(() => false)) throw new TokenPausedError();
   const fail = async (error: string) => {
     await prisma.aiDraft.updateMany({
       where: { id: draft.id, status: "SENDING" },
@@ -487,6 +490,10 @@ export async function processSendAiDraft(
     if (isConfirmedSendRejection(error)) {
       // Nothing was delivered, so a later send may try again.
       await prisma.postbackDelivery.delete({ where: { id: claimId } });
+      if (error instanceof TokenExpiredError) {
+        await markTokenInvalid(account.instagramId);
+        throw new TokenPausedError();
+      }
       return fail(describe(error));
     }
     const unconfirmed = classifySendError(error);
@@ -615,7 +622,16 @@ export async function processAiJob(
 }
 
 export function createAiWorker(): Worker<AiQueueJob> {
-  const worker = new Worker<AiQueueJob>(AI_QUEUE_NAME, (job) => processAiJob(job), {
+  const worker = new Worker<AiQueueJob>(AI_QUEUE_NAME, async (job, token) => {
+    try {
+      await processAiJob(job);
+    } catch (error) {
+      if (!(error instanceof TokenPausedError)) throw error;
+      // The reply waits for the Instagram token; the draft stays SENDING.
+      await job.moveToDelayed(Date.now() + TOKEN_PAUSE_RECHECK_MS, token);
+      throw new DelayedError();
+    }
+  }, {
     connection: getRedisConnection(),
     concurrency: 3,
   });

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
 import { alertSubject, emailWorkspaceOwner } from "@/lib/ops/alert-email";
-import { runSystemCheck } from "@/lib/ops/system-check";
+import { CRON_LAST_RUN_KEY, runSystemCheck } from "@/lib/ops/system-check";
+import { getRedisConnection } from "@/lib/queue/client";
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -14,6 +15,8 @@ export async function GET(request: NextRequest) {
       { status: 401 }
     );
   }
+
+  await getRedisConnection().set(CRON_LAST_RUN_KEY, String(Date.now()));
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);

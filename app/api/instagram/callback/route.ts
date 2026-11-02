@@ -1,3 +1,4 @@
+import { clearTokenInvalid } from "@/lib/queue/token-pause";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db/client";
@@ -99,6 +100,8 @@ export async function GET(request: NextRequest) {
     } else {
       await prisma.instagramAccount.create({ data: { ...data, workspaceId: state.workspaceId, instagramId, provider: 'META' } });
     }
+
+    await clearTokenInvalid(instagramId).catch(() => undefined);
 
     return NextResponse.redirect(`${baseUrl}/dashboard?connected=true`);
   } catch (err) {
