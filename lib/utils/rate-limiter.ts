@@ -299,6 +299,8 @@ const PACE_SPACING_MS = Math.ceil(60_000 / PACE_PER_MINUTE);
 // A job this far past its slot (the worker was down) takes a new one: slots from
 // the past would otherwise all go out at once.
 const PACE_SLOT_VALID_MS = 2 * 60_000;
+// Below the spacing because delayed jobs wake a few seconds early or late.
+const PACE_MIN_GAP_MS = Math.floor(PACE_SPACING_MS * 0.7);
 
 export type PaceResult =
   | { allowed: true }
@@ -320,7 +322,10 @@ export async function reservePaceSlot(
     cooldownLeft === 0 &&
     heldSlotAt !== undefined &&
     heldSlotAt <= now + 1000 &&
-    now - heldSlotAt < PACE_SLOT_VALID_MS
+    now - heldSlotAt < PACE_SLOT_VALID_MS &&
+    // A floor under the slots: places handed out before the pace was lowered do
+    // not get to send at the old speed.
+    (await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS, "NX"))
   ) {
     return { allowed: true };
   }
@@ -333,7 +338,10 @@ export async function reservePaceSlot(
       PACE_SPACING_MS
     )
   );
-  if (slotAt <= now) return { allowed: true };
+  if (slotAt <= now) {
+    await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS);
+    return { allowed: true };
+  }
   return { allowed: false, retryInMs: slotAt - now, slotAt };
 }
 

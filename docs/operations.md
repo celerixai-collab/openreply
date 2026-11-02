@@ -31,16 +31,17 @@ makes GitHub email the owner; this was tested on 2026-11-02.
 | 6 DMs a minute at launch, with hopeless sends being retried (2026-10-29) | Throttled, so lowered to 3 |
 | 3 DMs a minute (2026-10-29 to the outage) | Stable |
 | 12 DMs and 12 public replies a minute (2026-11-02) | Limit hit within 8 minutes |
+| 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 25 minutes |
 
-`DM_PACE_PER_MINUTE=6`, sent evenly and with those retries gone, and
-`PUBLIC_REPLY_PACE_PER_MINUTE=2`. If 6 gets throttled, go back to 3. Raising them needs evidence,
+`DM_PACE_PER_MINUTE=3`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`. Raising them needs evidence,
 not hope: the worker logs `[API usage, last 10 min]`, with what the calls were spent on
-and the usage Instagram reports. `Application request limit reached` is code 4, the
-app's allowance, which reads use up too. `[code=...]` in the error says which limit it
-was.
+and the usage Instagram reports. The app usage it reports stayed at 0 while DMs were
+being throttled, so this limit is not the app's call allowance. `[code=...]` in an error
+says which limit it was: code 4 on public replies is `Application request limit reached`.
 
-Comments wait in order: each gets a sending time one spacing apart (`reservePaceSlot`).
-The DM does not wait for the public reply.
+Comments wait in order: each gets a sending time one spacing apart (`reservePaceSlot`),
+with a minimum gap under it so a lowered pace also applies to jobs already waiting. The
+DM does not wait for the public reply.
 
 ## The Instagram token
 

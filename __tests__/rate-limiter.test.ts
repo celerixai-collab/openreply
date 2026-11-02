@@ -7,7 +7,8 @@
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockGet, mockEval, mockDel, mockDecr, mockPttl } = vi.hoisted(() => ({
+const { mockGet, mockEval, mockDel, mockDecr, mockPttl, mockSet } = vi.hoisted(() => ({
+  mockSet: vi.fn(),
   mockGet: vi.fn(),
   mockEval: vi.fn(),
   mockDel: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("ioredis", () => {
     this.del = mockDel;
     this.decr = mockDecr;
     this.pttl = mockPttl;
+    this.set = mockSet;
     return this;
   });
   return { default: MockRedis };
@@ -167,6 +169,7 @@ describe("reservePaceSlot", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     mockPttl.mockReset().mockResolvedValue(-2);
+    mockSet.mockReset().mockResolvedValue("OK");
     mockEval.mockReset();
   });
   afterEach(() => vi.restoreAllMocks());
@@ -189,6 +192,16 @@ describe("reservePaceSlot", () => {
   it("lets a job through on the place it already waited for, without taking another", async () => {
     await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({ allowed: true });
     expect(mockEval).not.toHaveBeenCalled();
+  });
+
+  it("sends a job holding an old, closer-spaced place to the back when the last send was too recent", async () => {
+    mockSet.mockResolvedValue(null);
+    mockEval.mockResolvedValue(String(NOW + 40_000));
+    await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({
+      allowed: false,
+      retryInMs: 40_000,
+      slotAt: NOW + 40_000,
+    });
   });
 
   it("takes a new place when the job woke long after its slot, so a stopped worker does not cause a burst", async () => {
