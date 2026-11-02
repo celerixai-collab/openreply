@@ -386,6 +386,27 @@ export async function reservePaceSlot(
 }
 
 /**
+ * New sending times for comments already waiting, so a changed pace also applies
+ * to them. Their old times were handed out at the old pace.
+ */
+export async function restartPaceLine(
+  instagramAccountId: string,
+  count: number
+): Promise<number[]> {
+  const client = getRedis();
+  const cooldownLeft = Math.max(0, await client.pttl(`cooldown:dm:${instagramAccountId}`));
+  const start = Date.now() + cooldownLeft;
+  const times = Array.from({ length: count }, (_, i) => start + PACE_SPACING_MS * (i + 1));
+  await client.set(
+    `pace:next:${instagramAccountId}`,
+    String(start + PACE_SPACING_MS * (count + 1)),
+    "EX",
+    604800
+  );
+  return times;
+}
+
+/**
  * Note a throttle error. Returns true when it tripped the cooldown, which
  * holds every private reply from this account for the next while.
  */

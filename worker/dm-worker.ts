@@ -16,6 +16,7 @@ import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
   removeDuplicateDelayedComments,
+  respaceWaitingComments,
   requeuePersonDedupSkips,
   resendMissedComments,
   requeueThrottledComments,
@@ -55,9 +56,9 @@ void requeuePersonDedupSkips().catch((error) =>
     error instanceof Error ? error.message : error
   )
 );
-void removeDuplicateDelayedComments().catch((error) =>
+void removeDuplicateDelayedComments().then(respaceWaitingComments).catch((error) =>
   console.error(
-    "[DM Worker] Removing duplicate waiting jobs failed:",
+    "[DM Worker] Tidying the waiting jobs failed:",
     error instanceof Error ? error.message : error
   )
 );

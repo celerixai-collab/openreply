@@ -12,6 +12,7 @@ import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
 import { getDMQueue } from "@/lib/queue/client";
 import { SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { restartPaceLine } from "@/lib/utils/rate-limiter";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
 const CAMPAIGN_IDS = ["cmvgv55ce000208l5mzi3maff", "cmvgv5uv6000307jybnpiejoe"];
@@ -197,6 +198,46 @@ export async function removeDuplicateDelayedComments(): Promise<number> {
   }
   if (removed > 0) console.log(`[DM Worker] Removed ${removed} duplicate waiting jobs, kept ${seen.size}`);
   return removed;
+}
+
+/**
+ * Run at every start: sending times are handed out when a comment joins the line,
+ * so without this a changed DM_PACE_PER_MINUTE would not reach the comments
+ * already waiting. Oldest place first.
+ */
+export async function respaceWaitingComments(): Promise<number> {
+  const jobs = await getDMQueue().getDelayed(0, -1);
+  const lines = new Map<string, typeof jobs>();
+  for (const job of jobs) {
+    if (
+      job.name !== "process-comment" ||
+      !("paceSlotAt" in job.data) ||
+      job.data.paceSlotAt === undefined ||
+      job.data.liveLine ||
+      job.id?.endsWith("_pub")
+    ) {
+      continue;
+    }
+    const line = lines.get(job.data.instagramAccountId) ?? [];
+    line.push(job);
+    lines.set(job.data.instagramAccountId, line);
+  }
+  let moved = 0;
+  for (const [instagramAccountId, line] of lines) {
+    line.sort((a, b) => ("paceSlotAt" in a.data && "paceSlotAt" in b.data ? a.data.paceSlotAt! - b.data.paceSlotAt! : 0));
+    const times = await restartPaceLine(instagramAccountId, line.length);
+    for (const [i, job] of line.entries()) {
+      try {
+        await job.updateData({ ...job.data, paceSlotAt: times[i] });
+        await job.changeDelay(times[i] - Date.now());
+        moved += 1;
+      } catch {
+        // It started running in the meantime.
+      }
+    }
+  }
+  if (moved > 0) console.log(`[DM Worker] Gave ${moved} waiting comments new sending times`);
+  return moved;
 }
 
 /**

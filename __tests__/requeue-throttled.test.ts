@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDelayed, getWaiting, getActive, prismaMock } = vi.hoisted(() => ({
+const { getDelayed, getWaiting, getActive, prismaMock, restartPaceLine } = vi.hoisted(() => ({
+  restartPaceLine: vi.fn(),
   getDelayed: vi.fn(),
   getWaiting: vi.fn(),
   getActive: vi.fn(),
@@ -8,9 +9,10 @@ const { getDelayed, getWaiting, getActive, prismaMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed, getWaiting, getActive }) }));
 vi.mock("@/lib/db/client", () => ({ prisma: prismaMock }));
+vi.mock("@/lib/utils/rate-limiter", () => ({ restartPaceLine }));
 vi.mock("@/lib/contacts/contacts", () => ({ claimOnce: vi.fn(async () => true) }));
 
-import { clearOrphanedRetryMarks, removeDuplicateDelayedComments } from "@/lib/queue/requeue-throttled";
+import { clearOrphanedRetryMarks, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
 
 function job(id: string, commentId: string, wakesAt: number, name = "process-comment") {
   return {
@@ -47,6 +49,61 @@ describe("removeDuplicateDelayedComments", () => {
 
     await expect(removeDuplicateDelayedComments()).resolves.toBe(0);
     expect(followUp.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("respaceWaitingComments", () => {
+  const NOW = 1_800_000_000_000;
+  const waiting = (id: string, slot: number, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: "process-comment",
+    data: { commentId: id, instagramAccountId: "ig", paceSlotAt: slot, ...extra },
+    updateData: vi.fn(async () => undefined),
+    changeDelay: vi.fn(async () => undefined),
+  });
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    getDelayed.mockReset();
+    restartPaceLine.mockReset().mockResolvedValue([NOW + 10_000, NOW + 20_000]);
+  });
+
+  it("gives waiting comments new sending times at the current pace, oldest place first", async () => {
+    const second = waiting("b", NOW + 7_000_000);
+    const first = waiting("a", NOW + 3_000_000);
+    getDelayed.mockResolvedValue([second, first]);
+
+    await expect(respaceWaitingComments()).resolves.toBe(2);
+
+    expect(restartPaceLine).toHaveBeenCalledWith("ig", 2);
+    expect(first.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "a", paceSlotAt: NOW + 10_000 }));
+    expect(first.changeDelay).toHaveBeenCalledWith(10_000);
+    expect(second.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentId: "b", paceSlotAt: NOW + 20_000 }));
+    expect(second.changeDelay).toHaveBeenCalledWith(20_000);
+  });
+
+  it("leaves new comments, reply retries and jobs without a place alone", async () => {
+    const live = waiting("live", NOW + 1000, { liveLine: true });
+    const reply = waiting("reply_pub", NOW + 1000);
+    const retry = waiting("retry", NOW + 1000, { paceSlotAt: undefined });
+    getDelayed.mockResolvedValue([live, reply, retry]);
+
+    await expect(respaceWaitingComments()).resolves.toBe(0);
+
+    expect(restartPaceLine).not.toHaveBeenCalled();
+    expect(live.changeDelay).not.toHaveBeenCalled();
+    expect(reply.changeDelay).not.toHaveBeenCalled();
+    expect(retry.changeDelay).not.toHaveBeenCalled();
+  });
+
+  it("carries on when a job started running in the meantime", async () => {
+    const started = waiting("a", NOW + 1000);
+    started.changeDelay.mockRejectedValue(new Error("not delayed"));
+    const next = waiting("b", NOW + 2000);
+    getDelayed.mockResolvedValue([started, next]);
+
+    await expect(respaceWaitingComments()).resolves.toBe(1);
+    expect(next.changeDelay).toHaveBeenCalledTimes(1);
   });
 });
 

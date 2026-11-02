@@ -39,6 +39,7 @@ import {
   reserveDMSlot,
   releaseDMSlot,
   reservePaceSlot,
+  restartPaceLine,
   RATE_LIMIT_MAX,
 } from "../lib/utils/rate-limiter";
 
@@ -283,5 +284,26 @@ describe("reservePaceSlot", () => {
         slotAt: NOW + 60_000,
       });
     });
+  });
+});
+
+describe("restartPaceLine", () => {
+  const NOW = 1_800_000_000_000;
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    mockPttl.mockReset().mockResolvedValue(-2);
+    mockSet.mockReset().mockResolvedValue("OK");
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("hands out times one spacing apart and points the line past the last", async () => {
+    await expect(restartPaceLine("ig", 3)).resolves.toEqual([NOW + 10_000, NOW + 20_000, NOW + 30_000]);
+    expect(mockSet).toHaveBeenCalledWith("pace:next:ig", String(NOW + 40_000), "EX", 604800);
+  });
+
+  it("starts after a cooldown", async () => {
+    mockPttl.mockResolvedValue(60_000);
+    await expect(restartPaceLine("ig", 1)).resolves.toEqual([NOW + 70_000]);
   });
 });

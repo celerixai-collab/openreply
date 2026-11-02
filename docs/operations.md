@@ -44,7 +44,8 @@ and the usage Instagram reports. The app usage it reports stayed at 0 while DMs 
 being throttled, so this limit is not the app's call allowance. `[code=...]` in an error
 says which limit it was: code 4 on public replies is `Application request limit reached`.
 
-The backlog waits in order: each comment gets a sending time one spacing apart (`reservePaceSlot`),
+A new `DM_PACE_PER_MINUTE` reaches comments already waiting at the worker's next start
+(`respaceWaitingComments`). The backlog waits in order: each comment gets a sending time one spacing apart (`reservePaceSlot`),
 with a minimum gap under it so a lowered pace also applies to jobs already waiting. The
 DM does not wait for the public reply, but the reply waits for the DM's turn: it tells
 people to check their inbox, so it must never go out while their DM is still in line.
