@@ -6,6 +6,8 @@ import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
+import { runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { getBaseUrl } from "@/lib/env";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
@@ -124,12 +126,47 @@ async function refreshTokens() {
 setTimeout(() => void refreshTokens(), 30_000);
 const tokenRefreshTimer = setInterval(() => void refreshTokens(), TOKEN_REFRESH_INTERVAL_MS);
 
+// Mail the owner when a check finds a problem. The mail key lives on the web
+// app, so the worker asks it to send.
+const SYSTEM_CHECK_INTERVAL_MS = 10 * 60_000;
+async function postAlert(body: { ping: true } | { workspaceId: string; issues: SystemIssue[] }) {
+  const response = await fetch(`${getBaseUrl()}/api/ops/alert`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.CRON_SECRET || process.env.NEXTAUTH_SECRET}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Alert endpoint answered ${response.status}`);
+}
+async function systemCheck() {
+  try {
+    const alerted = await runSystemCheck({
+      includeWorker: false,
+      deliver: (workspaceId, issues) => postAlert({ workspaceId, issues }),
+    });
+    if (alerted > 0) console.log(`[System check] Mailed ${alerted} problem(s) to the owner`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[System check] Failed:", message);
+  }
+}
+postAlert({ ping: true })
+  .then(() => console.log("[System check] Alert endpoint reachable"))
+  .catch((error) =>
+    console.error("[System check] Alert endpoint not reachable:", error instanceof Error ? error.message : error)
+  );
+setTimeout(() => void systemCheck(), 60_000);
+const systemCheckTimer = setInterval(() => void systemCheck(), SYSTEM_CHECK_INTERVAL_MS);
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
   clearInterval(launchDripTimer);
   clearInterval(tokenRefreshTimer);
+  clearInterval(systemCheckTimer);
   await Promise.all([worker.close(), aiWorker.close()]);
   process.exit(0);
 }

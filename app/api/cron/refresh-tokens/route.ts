@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
+import { alertSubject, emailWorkspaceOwner } from "@/lib/ops/alert-email";
+import { runSystemCheck } from "@/lib/ops/system-check";
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -26,11 +28,23 @@ export async function GET(request: NextRequest) {
 
   const results = await refreshExpiringTokens();
 
+  // The worker runs these checks every 10 minutes but cannot report itself
+  // being down, so this one also looks at the worker.
+  const alerted = await runSystemCheck({
+    includeWorker: true,
+    deliver: (workspaceId, issues) =>
+      emailWorkspaceOwner(workspaceId, alertSubject(issues), issues),
+  }).catch((error) => {
+    console.error("[System check] Failed:", error);
+    return 0;
+  });
+
   return NextResponse.json({
     success: true,
     data: {
       totalProcessed: results.length,
       workspacesReset: usageReset.count,
+      alerted,
       results,
     },
   });
