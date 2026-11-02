@@ -29,7 +29,6 @@ interface DiagnosticsData {
     errorMessage: string | null;
     createdAt: string;
   }>;
-  recoverableComments: number;
   dmFailures: Array<{
     id: string;
     status: string;
@@ -81,7 +80,6 @@ export default function DiagnosticsPage() {
   const { t, label, locale } = useI18n();
   const [data, setData] = useState<DiagnosticsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [resending, setResending] = useState(false);
 
   async function refreshDiagnostics() {
     setLoading(true);
@@ -118,13 +116,6 @@ export default function DiagnosticsPage() {
     return <div className="panel rounded p-8 h-64" />;
   }
 
-  async function resendMissed() {
-    setResending(true);
-    await fetch("/api/admin/requeue-expired-token", { method: "POST" });
-    setResending(false);
-    await refreshDiagnostics();
-  }
-
   const workerAgeSeconds =
     data?.workerHealth.ageMs == null
       ? null
@@ -149,20 +140,6 @@ export default function DiagnosticsPage() {
         </button>
       </div>
 
-      {data?.recoverableComments ? (
-        <div className="panel flex flex-col justify-between gap-3 rounded p-4 sm:flex-row sm:items-center sm:p-6">
-          <p className="text-sm font-medium text-foreground">
-            {t("{count} comments can still get their DM", { count: data.recoverableComments })}
-          </p>
-          <button
-            onClick={() => void resendMissed()}
-            disabled={resending}
-            className="rounded bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
-          >
-            {t("Resend")}
-          </button>
-        </div>
-      ) : null}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3">
         <div className="panel rounded p-4 sm:p-5">

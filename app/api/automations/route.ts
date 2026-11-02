@@ -1,4 +1,3 @@
-import { findBannedCopy } from "@/lib/utils/banned-copy";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentWorkspaceId } from "@/lib/auth";
@@ -314,13 +313,6 @@ export async function POST(request: NextRequest) {
   const workspaceId = context.workspaceId;
 
   const body = await request.json();
-  const bannedCopy = findBannedCopy(body);
-  if (bannedCopy) {
-    return NextResponse.json(
-      { success: false, error: `Mac 和 Windows 都能用，文案不能寫「${bannedCopy}」` },
-      { status: 400 }
-    );
-  }
   const parsed = createAutomationSchema.safeParse(body);
 
   if (!parsed.success) {
@@ -479,13 +471,6 @@ export async function PATCH(request: NextRequest) {
   }
 
   const body = await request.json();
-  const bannedCopy = findBannedCopy(body);
-  if (bannedCopy) {
-    return NextResponse.json(
-      { success: false, error: `Mac 和 Windows 都能用，文案不能寫「${bannedCopy}」` },
-      { status: 400 }
-    );
-  }
   const parsed = updateAutomationSchema.safeParse(body);
 
   if (!parsed.success) {

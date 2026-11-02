@@ -70,10 +70,10 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
     }
   }
 
-  // Renewal runs every couple of days, so a token under 45 days left means it
-  // has kept failing; one stray failure, or one from before a reconnect, is not.
+  // Renewal starts at 30 days left and retries every 6 hours, so under 28 days
+  // means it has kept failing; one stray failure, or one from before a reconnect, is not.
   const renewalDue = accounts.some(
-    (a) => a.tokenExpiresAt && a.tokenExpiresAt.getTime() < now + 45 * DAY_MS
+    (a) => a.tokenExpiresAt && a.tokenExpiresAt.getTime() < now + 28 * DAY_MS
   );
   const refreshFailure = renewalDue && await prisma.operationalEvent.findFirst({
     where: {
@@ -135,7 +135,7 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
     issues.push({
       id: "replied-no-dm",
       title: `有 ${repliedNoDm} 則留言已回覆超過 2 小時，Auto DM 還沒送到`,
-      detail: "到 Diagnostics 頁面查看，或按「補發」。",
+      detail: "系統會自動補發一次；這封代表還有沒送到的，到 DM Logs 查看。",
     });
   }
 

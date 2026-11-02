@@ -14,6 +14,7 @@ import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
   requeuePersonDedupSkips,
+  resendMissedComments,
   requeueThrottledComments,
   requeueThrottledEverywhere,
 } from "@/lib/queue/requeue-throttled";
@@ -174,8 +175,22 @@ postAlert({ ping: true })
   });
 // The baseline for "the cron is late", so a cron that never runs is noticed too.
 void getRedisConnection().set(CRON_LAST_RUN_KEY, String(Date.now()), "NX").catch(() => undefined);
-setTimeout(() => void systemCheck(), 60_000);
-const systemCheckTimer = setInterval(() => void systemCheck(), SYSTEM_CHECK_INTERVAL_MS);
+async function resendMissed() {
+  try {
+    const count = await resendMissedComments();
+    if (count > 0) console.log(`[DM Worker] Re-queued ${count} comments that were never delivered`);
+  } catch (error) {
+    console.error("[DM Worker] Re-sending missed comments failed:", error instanceof Error ? error.message : error);
+  }
+}
+setTimeout(() => {
+  void systemCheck();
+  void resendMissed();
+}, 60_000);
+const systemCheckTimer = setInterval(() => {
+  void systemCheck();
+  void resendMissed();
+}, SYSTEM_CHECK_INTERVAL_MS);
 
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);

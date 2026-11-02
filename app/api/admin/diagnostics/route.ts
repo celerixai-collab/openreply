@@ -3,7 +3,6 @@ import { getCurrentWorkspaceId } from "@/lib/auth";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
 import { getWorkerAlerts, getWorkerHealth } from "@/lib/ops/worker-health";
-import { countRecoverableComments } from "@/lib/queue/requeue-throttled";
 
 export const runtime = "nodejs";
 
@@ -24,7 +23,6 @@ export async function GET() {
     dmFailures,
     tokenRefreshFailures,
     operationalEvents,
-    recoverableComments,
   ] = await Promise.all([
     getDMQueue().getJobCounts("waiting", "active", "delayed", "failed"),
     getWorkerHealth(),
@@ -91,7 +89,6 @@ export async function GET() {
         resolvedAt: true,
       },
     }),
-    countRecoverableComments(workspaceId),
   ]);
 
   return NextResponse.json({
@@ -104,7 +101,6 @@ export async function GET() {
       dmFailures,
       tokenRefreshFailures,
       operationalEvents,
-      recoverableComments,
     },
   });
 }

@@ -4,9 +4,8 @@ import { refreshLongLivedToken } from "@/lib/meta/client";
 import { clearTokenInvalid } from "@/lib/queue/token-pause";
 
 // Instagram extends a token that is at least a day old by another 60 days, with
-// no login. Renewing every couple of days keeps it near 60 days left, so a
-// renewal that stops working is noticed about two months before anything breaks.
-const RENEW_WHEN_DAYS_LEFT = 58;
+// no login. Renewing once a month leaves a month to notice one that stops working.
+const RENEW_WHEN_DAYS_LEFT = 30;
 
 export type TokenRefreshResult = {
   instagramAccountId: string;
@@ -16,7 +15,7 @@ export type TokenRefreshResult = {
 };
 
 /**
- * Renew Instagram tokens that are a couple of days old. Called by the cron
+ * Renew Instagram tokens that are a month old. Called by the cron
  * route and by the worker: a token that runs out stops every campaign, so this
  * must not depend on one scheduler alone.
  */
