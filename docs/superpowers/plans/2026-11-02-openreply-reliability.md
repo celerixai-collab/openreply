@@ -14,7 +14,7 @@ place, and alert on what people experience. Lasting rules are in `docs/operation
 | Nobody noticed for 2 days | No alert reached the owner | Mail on real problems, outside check by GitHub | Failure mail received from a deliberately failed run |
 | Throttled at 12, then again at 6 a minute | Speed raised without evidence, and limit code 4 mislabelled as 368 | 3 and 2 a minute, real code logged, quota usage logged | Pending: no throttle during the backlog |
 | Queue reached 3,683 jobs for 465 comments | Sweep re-queued waiting comments; public-reply retries also took the DM path | Both stopped, duplicates removed at every start | Pending: delayed jobs track pending comments |
-| "I got nothing", hours later | Waiting comments woke at random, so unlucky ones waited 5x longer | Each gets a sending time, oldest first | Pending: sends 10 seconds apart |
+| "I got nothing", hours later | Waiting comments woke at random, so unlucky ones waited 5x longer | Each gets a sending time, oldest first | Pending: sends 20 seconds apart |
 | Rows marked as waiting with no job | Marks trusted for 26 hours | Repair every 10 minutes | Unit test; pending: live count |
 | Broken deploys | Lint failure not stopping a chained command; tests in the Vercel build | `verify` in Railway's build, `&&` rule | CI green; Vercel READY |
 | Reconnect failed during the outage | Meta redirect still on the old domain | Fixed, and documented | Reconnected 2026-11-02 |

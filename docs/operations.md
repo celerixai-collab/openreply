@@ -31,10 +31,13 @@ makes GitHub email the owner; this was tested on 2026-11-02.
 | 6 DMs a minute at launch, with hopeless sends being retried (2026-10-29) | Throttled, so lowered to 3 |
 | 3 DMs a minute (2026-10-29 to the outage) | Stable |
 | 12 DMs and 12 public replies a minute (2026-11-02) | Limit hit within 8 minutes |
-| 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 25 minutes |
+| 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 11 minutes, exactly 200 DMs into the rolling hour |
 
-`DM_PACE_PER_MINUTE=3`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`. Raising them needs evidence,
-not hope: the worker logs `[API usage, last 10 min]`, with what the calls were spent on
+`DM_PACE_PER_MINUTE=3`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`. 3 a minute is 180 an hour, under
+the 200 seen above. Meta documents 750 private replies an hour, and other tools report
+running near it, so this account's limit is lower than the documented one for a reason not
+yet known. Raising the pace needs evidence, not hope: the throttle log line carries the
+error code, and the worker logs `[API usage, last 10 min]`, with what the calls were spent on
 and the usage Instagram reports. The app usage it reports stayed at 0 while DMs were
 being throttled, so this limit is not the app's call allowance. `[code=...]` in an error
 says which limit it was: code 4 on public replies is `Application request limit reached`.

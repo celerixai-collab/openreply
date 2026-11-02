@@ -989,7 +989,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
           }
         );
         console.warn(
-          `[DM Worker] Instagram throttled a private reply; retry ${throttleRetry + 1} in ${Math.round(delay / 60_000)} min${tripped ? " (account cooling down)" : ""}`
+          `[DM Worker] Instagram throttled a private reply; retry ${throttleRetry + 1} in ${Math.round(delay / 60_000)} min${tripped ? " (account cooling down)" : ""}: ${formatError(sendError)}`
         );
         continue;
       }
