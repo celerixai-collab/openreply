@@ -716,7 +716,7 @@ describe("DM Worker — Full Pipeline", () => {
     await getProcessor()({ ...createMockJob(), id: "comment_ig_456_comment_555_pub" });
 
     mockReservePaceSlot.mockResolvedValue({ allowed: true });
-    expect(vi.mocked(sendCommentReply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendCommentReply)).not.toHaveBeenCalled();
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
     expect(mockQueueAdd).not.toHaveBeenCalled();
   });
@@ -3469,5 +3469,47 @@ describe("DM Worker — Instagram refuses the token", () => {
 
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
     expect(job.moveToDelayed).toHaveBeenCalled();
+  });
+});
+
+describe("the public reply waits for the DM's turn", () => {
+  const withReply = { ...mockAutomation, publicReplyEnabled: true, publicReplyMessages: ["Sent!"] };
+
+  beforeEach(() => {
+    vi.mocked(sendCommentReply).mockReset().mockResolvedValue({ id: "public-reply" });
+    mockSendPrivateReply.mockClear();
+    mockReservePaceSlot.mockReset().mockResolvedValue({ allowed: true });
+    mockPrisma.automation.findMany.mockResolvedValue([withReply]);
+    mockPrisma.dmLog.findUnique.mockResolvedValue(null);
+  });
+
+  it("does not say the DM was sent while the DM is still waiting in line", async () => {
+    mockReservePaceSlot.mockResolvedValueOnce({ allowed: false, retryInMs: 42_000, slotAt: 999 });
+    await getProcessor()(createMockJob());
+    expect(vi.mocked(sendCommentReply)).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+
+  it("posts the reply and then the DM once its turn comes", async () => {
+    await getProcessor()(createMockJob({ ...mockJobData, paceSlotAt: 999 }));
+    expect(vi.mocked(sendCommentReply)).toHaveBeenCalledTimes(1);
+    expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendCommentReply).mock.invocationCallOrder[0]).toBeLessThan(
+      mockSendPrivateReply.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("holds a queued reply retry while that comment's DM has not gone out", async () => {
+    await getProcessor()({ ...createMockJob(), id: "comment_ig_456_comment_555_pub" });
+    expect(vi.mocked(sendCommentReply)).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+
+  it("posts a reply still owed after the DM went out, without waiting in line", async () => {
+    mockPrisma.dmLog.findUnique.mockResolvedValue({ status: "SENT", dmSentAt: new Date(), publicReplySentAt: null });
+    await getProcessor()(createMockJob());
+    expect(vi.mocked(sendCommentReply)).toHaveBeenCalledTimes(1);
+    expect(mockReservePaceSlot).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
   });
 });

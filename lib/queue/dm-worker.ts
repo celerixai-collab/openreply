@@ -533,7 +533,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       update: {},
     });
 
-    // Public reply leg — posted first, before the DM, as upstream does (Leo's
+    // Public reply leg — posted right before the DM, as upstream does (Leo's
     // choice), and independent of it: a DM that fails is retried on its own.
     // Paced, and idempotent across retries via publicReplySentAt.
     const replyPool =
@@ -612,15 +612,17 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       }
     }
     };
-    await postPublicReply();
+
+    // DM already sent on an earlier pass; the public reply is all this run
+    // needs. Don't re-send the DM.
+    if (!needsDm) {
+      await postPublicReply();
+      continue;
+    }
 
     // A public-reply retry: the job that queued it looks after the DM. Taking
     // the DM here as well gave a waiting comment one more job on every retry.
     if (job.id?.endsWith("_pub")) continue;
-
-    // DM already sent on an earlier pass; the public reply above was all this
-    // run needed. Don't re-send the DM.
-    if (!needsDm) continue;
 
     // Meta allows exactly ONE private reply per comment, ever — across every
     // campaign. When several campaigns match the same comment (duplicated
@@ -628,7 +630,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
     // the first can deliver; the rest would fail with "The comment is invalid
     // for a private reply". Skip them explicitly instead of burning an API call
     // and logging a failure the user can do nothing about. The public reply
-    // above still goes out per campaign — only the DM leg is deduped.
+    // still goes out per campaign — only the DM leg is deduped.
     const privateReplyUsedBy = await prisma.dmLog.findFirst({
       where: {
         commentId,
@@ -638,6 +640,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       select: { automation: { select: { name: true } } },
     });
     if (privateReplyUsedBy) {
+      await postPublicReply();
       await prisma.dmLog.update({
         where: {
           automationId_commentId: { automationId: automation.id, commentId },
@@ -657,6 +660,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
 
     const usage = await reserveWorkspaceDMSend(automation.workspaceId);
     if (!usage.allowed) {
+      await postPublicReply();
       await prisma.dmLog.update({
         where: {
           automationId_commentId: {
@@ -703,6 +707,10 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       }
       continue;
     }
+
+    // The reply tells the person to check their inbox, so it waits for the DM's
+    // turn: posted ahead of the backlog, it was hours ahead of the DM (2026-11-02).
+    await postPublicReply();
 
     let rateLimit;
     try {

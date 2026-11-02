@@ -46,7 +46,8 @@ says which limit it was: code 4 on public replies is `Application request limit 
 
 The backlog waits in order: each comment gets a sending time one spacing apart (`reservePaceSlot`),
 with a minimum gap under it so a lowered pace also applies to jobs already waiting. The
-DM does not wait for the public reply.
+DM does not wait for the public reply, but the reply waits for the DM's turn: it tells
+people to check their inbox, so it must never go out while their DM is still in line.
 
 ## The Instagram token
 
