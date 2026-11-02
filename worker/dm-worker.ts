@@ -7,6 +7,7 @@ import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
 import { runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { alertAuthToken } from "@/lib/ops/alert-email";
 import { getBaseUrl } from "@/lib/env";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
@@ -133,7 +134,7 @@ async function postAlert(body: { ping: true } | { workspaceId: string; issues: S
   const response = await fetch(`${getBaseUrl()}/api/ops/alert`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.CRON_SECRET || process.env.NEXTAUTH_SECRET}`,
+      Authorization: `Bearer ${alertAuthToken()}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),

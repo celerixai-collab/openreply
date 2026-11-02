@@ -1,6 +1,14 @@
+import { createHmac } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { getBaseUrl } from "@/lib/env";
+import { getBaseUrl, getEncryptionKeyHex } from "@/lib/env";
 import type { SystemIssue } from "@/lib/ops/system-check";
+
+// Proof between the worker and the web app. Derived from ENCRYPTION_KEY, the one
+// secret both must share (the web app encrypts the tokens the worker decrypts);
+// the key itself is never sent.
+export function alertAuthToken(): string {
+  return createHmac("sha256", getEncryptionKeyHex()).update("openreply-ops-alert").digest("hex");
+}
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
