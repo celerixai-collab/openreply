@@ -1,18 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDelayed, getWaiting, getActive, prismaMock, restartPaceLine } = vi.hoisted(() => ({
+const { getDelayed, getWaiting, getActive, add, prismaMock, restartPaceLine } = vi.hoisted(() => ({
   restartPaceLine: vi.fn(),
+  add: vi.fn(),
   getDelayed: vi.fn(),
   getWaiting: vi.fn(),
   getActive: vi.fn(),
   prismaMock: { dmLog: { findMany: vi.fn(), updateMany: vi.fn() } },
 }));
-vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed, getWaiting, getActive }) }));
+vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed, getWaiting, getActive, add }) }));
 vi.mock("@/lib/db/client", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/utils/rate-limiter", () => ({ restartPaceLine }));
 vi.mock("@/lib/contacts/contacts", () => ({ claimOnce: vi.fn(async () => true) }));
 
-import { clearOrphanedRetryMarks, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
+import { clearOrphanedRetryMarks, queueStrandedComments, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
 
 function job(id: string, commentId: string, wakesAt: number, name = "process-comment") {
   return {
@@ -104,6 +105,66 @@ describe("respaceWaitingComments", () => {
 
     await expect(respaceWaitingComments()).resolves.toBe(1);
     expect(next.changeDelay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("queueStrandedComments", () => {
+  const row = (commentId: string, automation: Record<string, unknown> = { postId: "post1" }) => ({
+    id: `row-${commentId}`,
+    commentId,
+    commentText: "hi",
+    commenterId: "person",
+    commenterName: null,
+    automation,
+    instagramAccount: { id: "conn", instagramId: "ig" },
+  });
+
+  beforeEach(() => {
+    getDelayed.mockReset().mockResolvedValue([]);
+    getWaiting.mockReset().mockResolvedValue([]);
+    getActive.mockReset().mockResolvedValue([]);
+    add.mockReset().mockResolvedValue(undefined);
+    prismaMock.dmLog.findMany.mockReset();
+  });
+
+  it("queues a waiting comment that has no job, from its own row", async () => {
+    prismaMock.dmLog.findMany.mockResolvedValue([row("a")]);
+
+    await expect(queueStrandedComments()).resolves.toBe(1);
+
+    expect(add).toHaveBeenCalledWith("process-comment", {
+      instagramAccountId: "ig",
+      accountConnectionId: "conn",
+      commentId: "a",
+      commentText: "hi",
+      commenterId: "person",
+      commenterName: undefined,
+      mediaId: "post1",
+      source: "POLLING",
+    });
+  });
+
+  it("leaves comments that have a DM job, and queues a comment once however many campaigns it matched", async () => {
+    getDelayed.mockResolvedValue([job("comment_a_pace_1", "a", 1000), job("comment_b_pub", "b", 1000)]);
+    prismaMock.dmLog.findMany.mockResolvedValue([row("a"), row("b"), row("b")]);
+
+    await expect(queueStrandedComments()).resolves.toBe(1);
+
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0][1]).toMatchObject({ commentId: "b" });
+  });
+
+  it("only looks at comments Instagram can still take, past the time a new one needs to get going", async () => {
+    prismaMock.dmLog.findMany.mockResolvedValue([]);
+    await queueStrandedComments();
+    const where = prismaMock.dmLog.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({
+      status: "PENDING",
+      attempts: { lt: 3 },
+      NOT: { commentId: { startsWith: "reveal:" } },
+      automation: { isActive: true },
+    });
+    expect(where.updatedAt.lt.getTime()).toBeLessThan(Date.now() - 29 * 60_000);
   });
 });
 

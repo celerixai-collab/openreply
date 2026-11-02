@@ -11,7 +11,7 @@
 import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
 import { getDMQueue } from "@/lib/queue/client";
-import { SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { MAX_COMMENT_SEND_ATTEMPTS, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 import { restartPaceLine } from "@/lib/utils/rate-limiter";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
@@ -276,6 +276,65 @@ export async function clearOrphanedRetryMarks(): Promise<number> {
   return orphans.length;
 }
 
+/**
+ * A waiting comment with no job relies on the sweep finding it on the post, and
+ * 36 stayed unsent that way for hours (2026-11-02). Its own row has all a job
+ * needs. Once each: a comment that is gone gets refused and the row settles.
+ */
+export async function queueStrandedComments(): Promise<number> {
+  const queue = getDMQueue();
+  const jobs = [
+    ...(await queue.getDelayed(0, -1)),
+    ...(await queue.getWaiting(0, -1)),
+    ...(await queue.getActive(0, -1)),
+  ];
+  const queued = new Set<string>();
+  for (const job of jobs) {
+    if (job.name === "process-comment" && "commentId" in job.data && !job.id?.endsWith("_pub")) {
+      queued.add(job.data.commentId);
+    }
+  }
+  const rows = await prisma.dmLog.findMany({
+    where: {
+      status: "PENDING",
+      attempts: { lt: MAX_COMMENT_SEND_ATTEMPTS },
+      dmDeliveryUnconfirmed: false,
+      NOT: { commentId: { startsWith: "reveal:" } },
+      automation: { isActive: true },
+      OR: [{ errorMessage: null }, { NOT: { errorMessage: { startsWith: SCHEDULED_RETRY_MARK } } }],
+      updatedAt: { lt: new Date(Date.now() - 30 * 60_000) },
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    select: {
+      id: true,
+      commentId: true,
+      commentText: true,
+      commenterId: true,
+      commenterName: true,
+      automation: { select: { postId: true } },
+      instagramAccount: { select: { id: true, instagramId: true } },
+    },
+  });
+  let count = 0;
+  for (const row of rows) {
+    if (queued.has(row.commentId) || !(await claimOnce(`stranded:${row.id}`))) continue;
+    queued.add(row.commentId);
+    await queue.add("process-comment", {
+      instagramAccountId: row.instagramAccount.instagramId,
+      accountConnectionId: row.instagramAccount.id,
+      commentId: row.commentId,
+      commentText: row.commentText,
+      commenterId: row.commenterId,
+      commenterName: row.commenterName ?? undefined,
+      mediaId: row.automation.postId ?? "",
+      source: "POLLING",
+    });
+    count += 1;
+  }
+  if (count > 0) console.log(`[DM Worker] Queued ${count} waiting comments that had no job`);
+  return count;
+}
+
 /** The worker's automatic re-send of everything that can still be delivered. */
 export async function resendMissedComments(): Promise<number> {
   const workspaces = await prisma.workspace.findMany({
@@ -288,5 +347,6 @@ export async function resendMissedComments(): Promise<number> {
     count += await requeueUnconfirmedDms(id);
   }
   count += await clearOrphanedRetryMarks();
+  count += await queueStrandedComments();
   return count;
 }
