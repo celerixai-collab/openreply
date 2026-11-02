@@ -15,6 +15,7 @@ import {
 } from "./comment-delivery";
 import { createHash } from "node:crypto";
 import { deliverOwedLaunchLink } from "@/lib/launch/owed-link";
+import { sentToPersonSince } from "@/lib/instagram/read-inbox";
 import { isTokenInvalid, markTokenInvalid, TOKEN_PAUSE_RECHECK_MS } from "@/lib/queue/token-pause";
 import { scheduleNudgesAfterMessage } from "@/lib/ai/nudges";
 import { DelayedError, UnrecoverableError, Worker, type Job } from "bullmq";
@@ -841,6 +842,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
     let delivered = false;
+    const sendStartedAt = Date.now();
     try {
       if (useOpeningDm) {
         const openingText = renderMessageWithTracking({
@@ -974,6 +976,23 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
       });
     } catch (error) {
       const sendError = classifySendError(error);
+      // Instagram's "unknown error" can still deliver: ask its own record.
+      if (
+        !delivered &&
+        isDeliveryUnconfirmed(sendError) &&
+        (await sentToPersonSince({
+          context: accessToken,
+          igUserId: automation.instagramAccount.instagramId,
+          personId: commenterId,
+          sinceMs: sendStartedAt - 5_000,
+        }).catch(() => false))
+      ) {
+        await prisma.dmLog.update({
+          where: { automationId_commentId: { automationId: automation.id, commentId } },
+          data: { status: "SENT", dmSentAt: new Date(), dmDeliveryUnconfirmed: false, errorMessage: null },
+        });
+        continue;
+      }
       // Retain reservations if the provider may have delivered the message.
       if (isConfirmedSendRejection(sendError)) {
         if (rateLimit?.reserved) await releaseDMSlot(instagramAccountId);

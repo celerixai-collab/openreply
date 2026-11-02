@@ -120,6 +120,10 @@ vi.mock("@/lib/utils/keyword-matcher", () => ({
   matchKeywords: mockMatchKeywords,
 }));
 
+const mockSentToPersonSince = vi.fn(async (): Promise<boolean> => false);
+vi.mock("@/lib/instagram/read-inbox", () => ({
+  sentToPersonSince: () => mockSentToPersonSince(),
+}));
 const mockReservePaceSlot = vi.fn(async () => ({ allowed: true }) as { allowed: boolean; retryInMs?: number; slotAt?: number });
 const mockRecordThrottle = vi.fn(async () => false);
 vi.mock("@/lib/utils/rate-limiter", () => ({
@@ -3511,5 +3515,38 @@ describe("the public reply waits for the DM's turn", () => {
     expect(vi.mocked(sendCommentReply)).toHaveBeenCalledTimes(1);
     expect(mockReservePaceSlot).not.toHaveBeenCalled();
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("Instagram answers \"unknown error\" to a private reply", () => {
+  const unknown = new MetaApiError(1, undefined, undefined, "An unknown error has occurred.");
+
+  beforeEach(() => {
+    mockReservePaceSlot.mockReset().mockResolvedValue({ allowed: true });
+    mockPrisma.automation.findMany.mockResolvedValue([mockAutomation]);
+    mockPrisma.dmLog.findUnique.mockResolvedValue(null);
+    mockSendPrivateReply.mockReset().mockRejectedValue(unknown);
+    mockPrisma.dmLog.update.mockClear();
+    mockSentToPersonSince.mockReset();
+  });
+  afterEach(() => mockSendPrivateReply.mockReset().mockResolvedValue({ id: "m" }));
+
+  it("counts it as sent when Instagram's record shows the message", async () => {
+    mockSentToPersonSince.mockResolvedValue(true);
+    await expect(getProcessor()(createMockJob())).resolves.toBeUndefined();
+    expect(mockPrisma.dmLog.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "SENT", dmDeliveryUnconfirmed: false }) })
+    );
+  });
+
+  it.each([
+    ["shows nothing", async () => false],
+    ["cannot be read", async () => { throw new Error("down"); }],
+  ])("stays unconfirmed when the record %s", async (_name, answer) => {
+    mockSentToPersonSince.mockImplementation(answer);
+    await expect(getProcessor()(createMockJob())).rejects.toThrow("unconfirmed");
+    expect(mockPrisma.dmLog.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED", dmDeliveryUnconfirmed: true }) })
+    );
   });
 });

@@ -1,19 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDelayed, getWaiting, getActive, add, prismaMock, restartPaceLine } = vi.hoisted(() => ({
+const { getDelayed, getWaiting, getActive, add, prismaMock, restartPaceLine, sentToPersonSince } = vi.hoisted(() => ({
+  sentToPersonSince: vi.fn(),
   restartPaceLine: vi.fn(),
   add: vi.fn(),
   getDelayed: vi.fn(),
   getWaiting: vi.fn(),
   getActive: vi.fn(),
-  prismaMock: { dmLog: { findMany: vi.fn(), updateMany: vi.fn() } },
+  prismaMock: { dmLog: { findMany: vi.fn(), updateMany: vi.fn(), update: vi.fn() } },
 }));
 vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed, getWaiting, getActive, add }) }));
 vi.mock("@/lib/db/client", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/utils/rate-limiter", () => ({ restartPaceLine }));
+vi.mock("@/lib/instagram/provider", () => ({ createInstagramContext: vi.fn(async () => ({ provider: "META", accessToken: "t" })) }));
+vi.mock("@/lib/instagram/read-inbox", () => ({ sentToPersonSince }));
 vi.mock("@/lib/contacts/contacts", () => ({ claimOnce: vi.fn(async () => true) }));
 
-import { clearOrphanedRetryMarks, queueStrandedComments, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
+import { clearOrphanedRetryMarks, settleUnconfirmedDms, queueStrandedComments, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
 
 function job(id: string, commentId: string, wakesAt: number, name = "process-comment") {
   return {
@@ -105,6 +108,38 @@ describe("respaceWaitingComments", () => {
 
     await expect(respaceWaitingComments()).resolves.toBe(1);
     expect(next.changeDelay).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("settleUnconfirmedDms", () => {
+  const failedAt = new Date("2026-11-02T11:39:57Z");
+  const row = { id: "r1", commenterId: "person", updatedAt: failedAt, instagramAccount: { instagramId: "ig" } };
+
+  beforeEach(() => {
+    prismaMock.dmLog.findMany.mockReset().mockResolvedValue([row]);
+    prismaMock.dmLog.update.mockReset().mockResolvedValue({});
+    sentToPersonSince.mockReset();
+  });
+
+  it("marks a DM as sent when Instagram's record shows it arrived", async () => {
+    sentToPersonSince.mockResolvedValue(true);
+    await expect(settleUnconfirmedDms("w")).resolves.toBe(1);
+    expect(sentToPersonSince).toHaveBeenCalledWith(expect.objectContaining({
+      igUserId: "ig", personId: "person", sinceMs: failedAt.getTime() - 120_000,
+    }));
+    expect(prismaMock.dmLog.update).toHaveBeenCalledWith({
+      where: { id: "r1" },
+      data: { status: "SENT", dmSentAt: failedAt, dmDeliveryUnconfirmed: false, errorMessage: null },
+    });
+  });
+
+  it.each([
+    ["the record shows nothing", async () => false],
+    ["the record cannot be read", async () => { throw new Error("down"); }],
+  ])("leaves the row alone when %s", async (_name, answer) => {
+    sentToPersonSince.mockImplementation(answer);
+    await expect(settleUnconfirmedDms("w")).resolves.toBe(0);
+    expect(prismaMock.dmLog.update).not.toHaveBeenCalled();
   });
 });
 

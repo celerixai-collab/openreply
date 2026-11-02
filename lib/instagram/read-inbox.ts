@@ -39,6 +39,31 @@ export async function getConversations({
   }));
 }
 
+/**
+ * Whether the account messaged this person since a moment, by Instagram's own
+ * record. "Unknown error" on a private reply can still deliver it, so this is
+ * what settles one. Only Meta connections can answer it.
+ */
+export async function sentToPersonSince({
+  context,
+  igUserId,
+  personId,
+  sinceMs,
+}: {
+  context: InstagramContext;
+  igUserId: string;
+  personId: string;
+  sinceMs: number;
+}): Promise<boolean> {
+  if (context.provider !== "META") return false;
+  const conversationId = await meta.findConversationWithUser(context.accessToken, igUserId, personId);
+  if (!conversationId) return false;
+  const messages = await meta.getConversationMessages(context.accessToken, conversationId);
+  return messages.some(
+    (message) => message.from?.id === igUserId && Date.parse(message.created_time ?? "") >= sinceMs
+  );
+}
+
 export async function getConversationMessages({
   context,
   conversationId,

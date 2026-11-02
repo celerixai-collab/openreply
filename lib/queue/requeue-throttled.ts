@@ -12,6 +12,8 @@ import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
 import { getDMQueue } from "@/lib/queue/client";
 import { MAX_COMMENT_SEND_ATTEMPTS, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { createInstagramContext } from "@/lib/instagram/provider";
+import { sentToPersonSince } from "@/lib/instagram/read-inbox";
 import { restartPaceLine } from "@/lib/utils/rate-limiter";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
@@ -143,6 +145,45 @@ export async function requeueExpiredTokenComments(workspaceId: string): Promise<
       errorMessage: null,
     },
   });
+  return count;
+}
+
+/**
+ * Unconfirmed DMs Instagram's own record shows did arrive. Runs before anything
+ * is sent again, since a repeat would reach the person a second time.
+ */
+export async function settleUnconfirmedDms(workspaceId: string): Promise<number> {
+  const rows = await prisma.dmLog.findMany({
+    where: {
+      workspaceId,
+      status: "FAILED",
+      dmDeliveryUnconfirmed: true,
+      NOT: { commentId: { startsWith: "reveal:" } },
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    select: { id: true, commenterId: true, updatedAt: true, instagramAccount: true },
+  });
+  let count = 0;
+  for (const row of rows) {
+    const arrived = await createInstagramContext(row.instagramAccount, `settle:${row.id}`)
+      .then((context) =>
+        sentToPersonSince({
+          context,
+          igUserId: row.instagramAccount.instagramId,
+          personId: row.commenterId,
+          // The failure is recorded moments after the attempt.
+          sinceMs: row.updatedAt.getTime() - 2 * 60_000,
+        })
+      )
+      .catch(() => false);
+    if (!arrived) continue;
+    await prisma.dmLog.update({
+      where: { id: row.id },
+      data: { status: "SENT", dmSentAt: row.updatedAt, dmDeliveryUnconfirmed: false, errorMessage: null },
+    });
+    count += 1;
+  }
+  if (count > 0) console.log(`[DM Worker] ${count} unconfirmed DMs did arrive`);
   return count;
 }
 
@@ -343,6 +384,7 @@ export async function resendMissedComments(): Promise<number> {
   });
   let count = 0;
   for (const { id } of workspaces) {
+    await settleUnconfirmedDms(id);
     count += await requeueExpiredTokenComments(id);
     count += await requeueUnconfirmedDms(id);
   }
