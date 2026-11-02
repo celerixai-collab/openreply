@@ -4,7 +4,7 @@ name: Uptime
 # being down. A failed run makes GitHub email the repository owner.
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 permissions:

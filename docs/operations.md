@@ -21,7 +21,9 @@ the token expired on 2026-10-31. Followers were only recorded on days someone op
 the page, which is what gave it away. Do not move daily work back there.
 
 Railway is the one scheduler, and GitHub watches it from outside. A failed Uptime run
-makes GitHub email the owner; this was tested on 2026-11-02.
+makes GitHub email the owner; this was tested on 2026-11-02. The schedule avoids minutes 0
+and 30: on those it produced no run at all in its first 2.5 hours, and GitHub says runs at
+busy times may be dropped.
 
 ## Sending speed
 
@@ -34,8 +36,11 @@ makes GitHub email the owner; this was tested on 2026-11-02.
 | 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 11 minutes, exactly 200 DMs into the rolling hour |
 | 6 DMs a minute with no hourly cap, as a test (2026-11-02) | Throttled again at about 200 in the rolling hour, `code=100 sub=2534001` |
 
-So this account's limit is about 200 private replies in a rolling hour, and Instagram
-reports it as `thread does not exist`, not as a rate limit. `DM_PACE_PER_MINUTE=3`,
+So this account's limit is now about 200 private replies in a rolling hour, and Instagram
+reports it as `thread does not exist`, not as a rate limit. It was higher before: on
+2026-10-20 about 400 went out in a rolling hour before refusals began, and 520 in all. Those
+were also comments days old, so the age of a comment does not explain the drop. Normal use
+never reaches it: before that day no hour passed 177. `DM_PACE_PER_MINUTE=3`,
 `PUBLIC_REPLY_PACE_PER_MINUTE=2`, `DM_HOURLY_BUDGET=190`. A comment from a webhook has its
 own line, 10 seconds apart and up to the full budget. Everything else waits in the backlog,
 which stops 30 short of the budget so it never holds up a new comment. Meta documents 750 private replies an hour, and other tools report
