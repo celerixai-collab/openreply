@@ -5,13 +5,14 @@
  * Assertions derive from RATE_LIMIT_MAX so they survive a change to the cap.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockGet, mockEval, mockDel, mockDecr } = vi.hoisted(() => ({
+const { mockGet, mockEval, mockDel, mockDecr, mockPttl } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockEval: vi.fn(),
   mockDel: vi.fn(),
   mockDecr: vi.fn(),
+  mockPttl: vi.fn(),
 }));
 
 vi.mock("ioredis", () => {
@@ -22,6 +23,7 @@ vi.mock("ioredis", () => {
     this.eval = mockEval;
     this.del = mockDel;
     this.decr = mockDecr;
+    this.pttl = mockPttl;
     return this;
   });
   return { default: MockRedis };
@@ -34,6 +36,7 @@ import {
   incrementDMCounter,
   reserveDMSlot,
   releaseDMSlot,
+  reservePaceSlot,
   RATE_LIMIT_MAX,
 } from "../lib/utils/rate-limiter";
 
@@ -155,5 +158,53 @@ describe("releaseDMSlot", () => {
 
     expect(count).toBe(0);
     expect(mockDel).toHaveBeenCalledWith("rate:dm:account_123");
+  });
+});
+
+describe("reservePaceSlot", () => {
+  const NOW = 1_800_000_000_000;
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    mockPttl.mockReset().mockResolvedValue(-2);
+    mockEval.mockReset();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends right away when nobody is ahead", async () => {
+    mockEval.mockResolvedValue(String(NOW));
+    await expect(reservePaceSlot("ig")).resolves.toEqual({ allowed: true });
+  });
+
+  it("gives a later comment its own place in line, ten seconds apart at six a minute", async () => {
+    mockEval.mockResolvedValue(String(NOW + 30_000));
+    await expect(reservePaceSlot("ig")).resolves.toEqual({
+      allowed: false,
+      retryInMs: 30_000,
+      slotAt: NOW + 30_000,
+    });
+    expect(mockEval).toHaveBeenCalledWith(expect.any(String), 1, "pace:next:ig", NOW, 10_000);
+  });
+
+  it("lets a job through on the place it already waited for, without taking another", async () => {
+    await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({ allowed: true });
+    expect(mockEval).not.toHaveBeenCalled();
+  });
+
+  it("takes a new place when the job woke long after its slot, so a stopped worker does not cause a burst", async () => {
+    mockEval.mockResolvedValue(String(NOW + 10_000));
+    await expect(reservePaceSlot("ig", NOW - 5 * 60_000)).resolves.toMatchObject({ allowed: false });
+    expect(mockEval).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds everyone, also a job on its slot, until the cooldown ends", async () => {
+    mockPttl.mockResolvedValue(60_000);
+    mockEval.mockResolvedValue(String(NOW + 60_000));
+    await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({
+      allowed: false,
+      retryInMs: 60_000,
+      slotAt: NOW + 60_000,
+    });
+    expect(mockEval).toHaveBeenCalledWith(expect.any(String), 1, "pace:next:ig", NOW + 60_000, 10_000);
   });
 });

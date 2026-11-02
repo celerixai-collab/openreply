@@ -11,6 +11,7 @@
 import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
 import { getDMQueue } from "@/lib/queue/client";
+import { SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
 const CAMPAIGN_IDS = ["cmvgv55ce000208l5mzi3maff", "cmvgv5uv6000307jybnpiejoe"];
@@ -198,6 +199,42 @@ export async function removeDuplicateDelayedComments(): Promise<number> {
   return removed;
 }
 
+/**
+ * A comment marked as having a job waiting is skipped by the sweep, so one whose
+ * job is gone would sit unsent. Clearing the mark hands it back to the sweep; a
+ * job missed by accident only costs one more, which the delivery claim stops.
+ */
+export async function clearOrphanedRetryMarks(): Promise<number> {
+  const queue = getDMQueue();
+  // In the order jobs move through, so one changing state is still seen.
+  const jobs = [
+    ...(await queue.getDelayed(0, -1)),
+    ...(await queue.getWaiting(0, -1)),
+    ...(await queue.getActive(0, -1)),
+  ];
+  const owned = new Set<string>();
+  for (const job of jobs) {
+    if (job.name === "process-comment" && "commentId" in job.data && !job.id?.endsWith("_pub")) {
+      owned.add(job.data.commentId);
+    }
+  }
+  const marked = await prisma.dmLog.findMany({
+    where: {
+      status: "PENDING",
+      errorMessage: { startsWith: SCHEDULED_RETRY_MARK },
+      // A row is marked just before its job is added.
+      updatedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    select: { id: true, commentId: true },
+  });
+  const orphans = marked.filter((row) => !owned.has(row.commentId)).map((row) => row.id);
+  if (orphans.length > 0) {
+    await prisma.dmLog.updateMany({ where: { id: { in: orphans } }, data: { errorMessage: null } });
+  }
+  return orphans.length;
+}
+
 /** The worker's automatic re-send of everything that can still be delivered. */
 export async function resendMissedComments(): Promise<number> {
   const workspaces = await prisma.workspace.findMany({
@@ -209,5 +246,6 @@ export async function resendMissedComments(): Promise<number> {
     count += await requeueExpiredTokenComments(id);
     count += await requeueUnconfirmedDms(id);
   }
+  count += await clearOrphanedRetryMarks();
   return count;
 }

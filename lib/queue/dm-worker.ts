@@ -60,6 +60,7 @@ import {
   reservePaceSlot,
   throttleRetryDelayMs,
 } from "@/lib/utils/rate-limiter";
+import type { PaceResult } from "@/lib/utils/rate-limiter";
 import {
   releaseWorkspaceDMReservation,
   reserveWorkspaceDMSend,
@@ -382,6 +383,8 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
   });
 
   let contactRecorded = false;
+  // One waiting job per comment, however many campaigns it matched.
+  let paceHold: PaceResult | undefined;
   for (const automation of automations) {
     // "Any word" campaigns fire on every comment; otherwise require a keyword hit.
     const matchResult = automation.matchAnyWord
@@ -666,12 +669,12 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
     // Pace private replies per minute, and hold them while the account cools
     // down after Instagram throttled it. A held comment is not a failure: it
     // waits in the queue and keeps its place in line.
-    let pace;
+    let pace: PaceResult;
     try {
-      pace = await reservePaceSlot(instagramAccountId);
+      pace = paceHold ?? (await reservePaceSlot(instagramAccountId, job.data.paceSlotAt));
     } catch (error) {
       console.warn("[DM Worker] Pacing unavailable, sending anyway:", formatError(error));
-      pace = { allowed: true as const };
+      pace = { allowed: true };
     }
     if (!pace.allowed) {
       await releaseWorkspaceDMReservation(automation.workspaceId, usage.periodStart);
@@ -683,10 +686,13 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
           errorMessage: `${SCHEDULED_RETRY_MARK} paced to protect the account`,
         },
       });
-      await getDMQueue().add("process-comment", job.data, {
-        delay: pace.retryInMs,
-        jobId: `comment_${instagramAccountId}_${commentId}_pace_${Date.now()}`,
-      });
+      if (!paceHold) {
+        await getDMQueue().add("process-comment", { ...job.data, paceSlotAt: pace.slotAt }, {
+          delay: pace.retryInMs,
+          jobId: `comment_${instagramAccountId}_${commentId}_pace_${Date.now()}`,
+        });
+        paceHold = pace;
+      }
       continue;
     }
 
@@ -976,7 +982,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
         });
         await getDMQueue().add(
           "process-comment",
-          { ...job.data, throttleRetry: throttleRetry + 1 },
+          { ...job.data, paceSlotAt: undefined, throttleRetry: throttleRetry + 1 },
           {
             delay,
             jobId: `comment_${instagramAccountId}_${commentId}_throttle_${throttleRetry + 1}`,
@@ -1478,6 +1484,8 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
           "[DM Worker] Failed to re-send follow prompt:",
           formatError(error),
         );
+        // Silence here leaves someone who just tapped the button with nothing.
+        if (!isPermanentRejection(error)) throw error;
       }
       return;
     }
@@ -1580,6 +1588,8 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
       }),
     });
   } catch (error) {
+    // processJob holds the job until the token works again.
+    if (error instanceof TokenExpiredError) throw error;
     console.log(
       "[DM Worker] Failed to send follow-up message:",
       formatError(error)

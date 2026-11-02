@@ -1,4 +1,5 @@
 import { getMetaGraphApiVersion, requireEnv } from "@/lib/env";
+import { noteApiCall } from "@/lib/meta/api-usage";
 
 function instagramGraphBase() {
   return `https://graph.instagram.com/${getMetaGraphApiVersion()}`;
@@ -28,8 +29,9 @@ export class TokenExpiredError extends MetaApiError {
 }
 
 export class RateLimitError extends MetaApiError {
-  constructor(message: string, fbTraceId?: string) {
-    super(368, undefined, fbTraceId, message);
+  // 368 is a spam block, 4 and 17 are call allowances: the fix differs.
+  constructor(message: string, fbTraceId?: string, code = 368) {
+    super(code, undefined, fbTraceId, message);
     this.name = "RateLimitError";
   }
 }
@@ -114,6 +116,7 @@ interface TokenResponse {
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
+  noteApiCall(response);
   const data = await response.json();
 
   if (!response.ok || (data as GraphApiError).error) {
@@ -136,7 +139,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
       case 368:
       case 4:
       case 17:
-        throw new RateLimitError(message, traceId);
+        throw new RateLimitError(message, traceId, code);
       case 10:
       case 100:
       case 200:

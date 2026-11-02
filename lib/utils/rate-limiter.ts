@@ -287,39 +287,54 @@ end
 return 1
 `;
 
-export type PaceResult = { allowed: true } | { allowed: false; retryInMs: number };
+// Hands out sending times one spacing apart. Waiting comments go out oldest
+// first and evenly, instead of each waking at random to try for a free slot,
+// which left the unlucky ones hours behind (2026-11-02).
+const NEXT_PACE_SLOT_SCRIPT = `
+local slot = math.max(tonumber(redis.call("GET", KEYS[1]) or "0"), tonumber(ARGV[1]))
+redis.call("SET", KEYS[1], string.format("%.0f", slot + tonumber(ARGV[2])), "EX", 604800)
+return string.format("%.0f", slot)
+`;
+const PACE_SPACING_MS = Math.ceil(60_000 / PACE_PER_MINUTE);
+// A job this far past its slot (the worker was down) takes a new one: slots from
+// the past would otherwise all go out at once.
+const PACE_SLOT_VALID_MS = 2 * 60_000;
+
+export type PaceResult =
+  | { allowed: true }
+  | { allowed: false; retryInMs: number; slotAt: number };
 
 /**
- * Take one private-reply slot for this minute, unless the account is cooling
- * down after Instagram throttled it. A refusal says when to try again, with
- * jitter so the waiting jobs do not all wake at once.
+ * Give a private reply its place in line, unless the account is cooling down
+ * after Instagram throttled it. A job that already waited for its place passes
+ * it back as `heldSlotAt` and goes through without taking another.
  */
-export async function reservePaceSlot(instagramAccountId: string): Promise<PaceResult> {
+export async function reservePaceSlot(
+  instagramAccountId: string,
+  heldSlotAt?: number
+): Promise<PaceResult> {
   const client = getRedis();
-  const cooldownLeft = await client.pttl(`cooldown:dm:${instagramAccountId}`);
-  if (cooldownLeft > 0) {
-    return { allowed: false, retryInMs: cooldownLeft + jitterMs(5 * 60_000) };
-  }
   const now = Date.now();
-  const minute = Math.floor(now / 60_000);
-  const slotKey = `pace:dm:${instagramAccountId}:${minute}`;
-  const waitKey = `pace:wait:${instagramAccountId}:${minute}`;
-  // Only a granted slot counts against the minute: a refused job must not
-  // use up a slot it never got, or a long queue lets almost nothing through.
-  const granted = toScriptNumber(
-    await client.eval(TAKE_PACE_SLOT_SCRIPT, 1, slotKey, PACE_PER_MINUTE, 120)
+  const cooldownLeft = Math.max(0, await client.pttl(`cooldown:dm:${instagramAccountId}`));
+  if (
+    cooldownLeft === 0 &&
+    heldSlotAt !== undefined &&
+    heldSlotAt <= now + 1000 &&
+    now - heldSlotAt < PACE_SLOT_VALID_MS
+  ) {
+    return { allowed: true };
+  }
+  const slotAt = toScriptNumber(
+    await client.eval(
+      NEXT_PACE_SLOT_SCRIPT,
+      1,
+      `pace:next:${instagramAccountId}`,
+      now + cooldownLeft,
+      PACE_SPACING_MS
+    )
   );
-  if (granted === 1) return { allowed: true };
-  // How many jobs were turned away this minute spreads them over that many
-  // minutes ahead, so they do not all come back at once.
-  const waiting = await client.incr(waitKey);
-  if (waiting === 1) await client.expire(waitKey, 120);
-  const backlogMinutes = Math.ceil(waiting / PACE_PER_MINUTE);
-  const nextMinute = (minute + 1) * 60_000 - now;
-  return {
-    allowed: false,
-    retryInMs: nextMinute + jitterMs(Math.max(1, backlogMinutes) * 60_000),
-  };
+  if (slotAt <= now) return { allowed: true };
+  return { allowed: false, retryInMs: slotAt - now, slotAt };
 }
 
 /**

@@ -22,3 +22,9 @@ export async function clearTokenInvalid(instagramId: string): Promise<void> {
 export async function isTokenInvalid(instagramId: string): Promise<boolean> {
   return (await getRedisConnection().get(key(instagramId))) !== null;
 }
+
+// Until one renewal has worked it is tried as soon as Instagram allows (a day after
+// connecting), so a renewal that cannot work shows up within two days of
+// connecting, not a month later. It went two months unnoticed before 2026-11-02.
+export const TOKEN_RENEWAL_PROVEN_KEY = "ops:token-renewal-proven";
+export const FIRST_RENEWAL_DAYS_LEFT = 58.5;

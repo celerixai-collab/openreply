@@ -120,7 +120,7 @@ vi.mock("@/lib/utils/keyword-matcher", () => ({
   matchKeywords: mockMatchKeywords,
 }));
 
-const mockReservePaceSlot = vi.fn(async () => ({ allowed: true }) as { allowed: boolean; retryInMs?: number });
+const mockReservePaceSlot = vi.fn(async () => ({ allowed: true }) as { allowed: boolean; retryInMs?: number; slotAt?: number });
 const mockRecordThrottle = vi.fn(async () => false);
 vi.mock("@/lib/utils/rate-limiter", () => ({
   reserveDMSlot: mockReserveDMSlot,
@@ -645,6 +645,43 @@ describe("DM Worker — Full Pipeline", () => {
       expect.objectContaining({ commentId: "comment_555" }),
       expect.objectContaining({ delay: 42_000 })
     );
+  });
+
+  it("queues the comment with its place in line and wakes on it", async () => {
+    mockReservePaceSlot.mockResolvedValueOnce({ allowed: false, retryInMs: 42_000, slotAt: 999 });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-comment",
+      expect.objectContaining({ commentId: "comment_555", paceSlotAt: 999 }),
+      expect.objectContaining({ delay: 42_000 })
+    );
+
+    mockQueueAdd.mockClear();
+    await getProcessor()(createMockJob({ ...mockJobData, paceSlotAt: 999 }));
+    expect(mockReservePaceSlot).toHaveBeenLastCalledWith("ig_456", 999);
+    expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues one waiting job for a comment however many campaigns it matched", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([mockAutomation, { ...mockAutomation, id: "auto_other" }]);
+    mockReservePaceSlot.mockResolvedValueOnce({ allowed: false, retryInMs: 42_000, slotAt: 999 });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockReservePaceSlot).toHaveBeenCalledTimes(1);
+    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throttle retry gives up its old place in line, so retries do not skip the pace", async () => {
+    mockSendPrivateReply.mockRejectedValueOnce(
+      new MetaApiError(100, 2534001, undefined, "thread does not exist [code=100 sub=2534001]")
+    );
+
+    await getProcessor()(createMockJob({ ...mockJobData, paceSlotAt: 999 }));
+
+    expect(mockQueueAdd.mock.calls[0][1].paceSlotAt).toBeUndefined();
   });
 
   it("a public-reply retry leaves the DM to the comment's own job, so waiting comments do not multiply", async () => {
@@ -1651,6 +1688,33 @@ describe("durable Zernio postback delivery", () => {
 
 describe("DM Worker — follow-gate re-check", () => {
   const gated = { ...mockAutomation, requireFollow: true, trackedLinks: [] };
+
+  const lastCheck = () =>
+    createMockPostbackJob({
+      instagramAccountId: "ig_456",
+      userId: "commenter_999",
+      payload: "followcheck:auto_789",
+      followRecheck: true,
+      followRecheckAttempt: 2,
+    });
+
+  it("retries the follow prompt when Instagram pushes back, so a tap never goes unanswered", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(gated);
+    mockGetUserFollowStatus.mockResolvedValue(false);
+    mockSendDirectMessageWithButton.mockRejectedValueOnce(new RateLimitError("too many"));
+
+    await expect(getProcessor()(lastCheck())).rejects.toThrow();
+  });
+
+  it("does not retry a follow prompt nobody can ever receive", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(gated);
+    mockGetUserFollowStatus.mockResolvedValue(false);
+    mockSendDirectMessageWithButton.mockRejectedValueOnce(
+      new MetaApiError(551, undefined, undefined, "This person isn't available right now")
+    );
+
+    await expect(getProcessor()(lastCheck())).resolves.toBeUndefined();
+  });
 
   it("re-checks a first false follow later instead of rejecting the tap", async () => {
     mockPrisma.automation.findFirst.mockResolvedValue(gated);
@@ -3346,6 +3410,31 @@ describe("DM Worker — Instagram refuses the token", () => {
     expect(updates).not.toContainEqual(
       expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
     );
+  });
+
+  it("holds a follow-up instead of dropping it", async () => {
+    const processor = getProcessor() as unknown as Run;
+    mockPrisma.automation.findFirst.mockResolvedValueOnce({
+      ...mockAutomation,
+      followUpEnabled: true,
+      followUpMessage: "thanks",
+    });
+    Object.assign(mockPrisma, {
+      aiAssistant: { findUnique: async () => null },
+      linkClick: { findFirst: async () => null },
+      aiDraft: { findFirst: async () => null },
+    });
+    mockSendDirectMessage.mockRejectedValueOnce(new TokenExpiredError("Session has expired"));
+    const job = {
+      name: "process-followup",
+      data: { instagramAccountId: "ig_456", userId: "commenter_999", automationId: "auto_789" },
+      id: "followup_1",
+      attemptsMade: 0,
+      moveToDelayed: vi.fn(),
+    };
+
+    await expect(processor(job, "lock")).rejects.toMatchObject({ name: "DelayedError" });
+    expect(job.moveToDelayed).toHaveBeenCalled();
   });
 
   it("sends nothing while the account is paused", async () => {

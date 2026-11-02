@@ -5,6 +5,7 @@ import {
 } from "@/lib/instagram/context";
 import { sendCommentReply } from "@/lib/instagram/send-messages";
 import { isInstagramThrottle } from "@/lib/instagram/delivery-errors";
+import { TokenExpiredError } from "@/lib/meta/client";
 import { getDMQueue, getRedisConnection } from "@/lib/queue/client";
 import {
   pausePublicReplies,
@@ -173,6 +174,8 @@ export async function runLaunchDripTick(): Promise<void> {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`[Launch drip] Reply to ${label} failed:`, detail.slice(0, 300));
+    // A refused token says nothing about this person: they stay in line.
+    if (error instanceof TokenExpiredError) return;
     // Volume pushback pauses replies and this person is tried again later.
     // Anything else (a deleted comment, an unclear outcome) is not retried,
     // so one bad comment cannot hold up the queue or be answered twice.

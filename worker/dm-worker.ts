@@ -6,9 +6,11 @@ import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
-import { ALERT_FAILING_KEY, CRON_LAST_RUN_KEY, runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { ALERT_FAILING_KEY, runSystemCheck, type SystemIssue } from "@/lib/ops/system-check";
+import { snapshotAllFollowers } from "@/lib/reports/follower-history";
 import { getRedisConnection } from "@/lib/queue/client";
 import { alertAuthToken } from "@/lib/ops/alert-email";
+import { takeApiUsageReport } from "@/lib/meta/api-usage";
 import { getBaseUrl } from "@/lib/env";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
@@ -115,8 +117,9 @@ const launchDripTimer = setInterval(() => {
   });
 }, 60_000);
 
-// Instagram tokens, checked here as well as in the Vercel cron: the worker is
-// always running, and a token that runs out stops every campaign.
+// Daily work belongs here, not in a Vercel cron. Vercel's cron calls reached the
+// routes without the secret and were refused every day until 2026-11-02, with
+// nobody told, which is how the Instagram token ran out.
 const TOKEN_REFRESH_INTERVAL_MS = 6 * 60 * 60_000;
 async function refreshTokens() {
   try {
@@ -133,8 +136,22 @@ async function refreshTokens() {
     console.error("[DM Worker] Token refresh failed:", message);
   }
 }
-setTimeout(() => void refreshTokens(), 30_000);
-const tokenRefreshTimer = setInterval(() => void refreshTokens(), TOKEN_REFRESH_INTERVAL_MS);
+async function snapshotFollowers() {
+  try {
+    const { recorded, failures } = await snapshotAllFollowers();
+    console.log(`[DM Worker] Follower snapshot: ${recorded} recorded, ${failures.length} failed`);
+  } catch (error) {
+    console.error("[DM Worker] Follower snapshot failed:", error instanceof Error ? error.message : error);
+  }
+}
+setTimeout(() => {
+  void refreshTokens();
+  void snapshotFollowers();
+}, 30_000);
+const tokenRefreshTimer = setInterval(() => {
+  void refreshTokens();
+  void snapshotFollowers();
+}, TOKEN_REFRESH_INTERVAL_MS);
 
 // Mail the owner when a check finds a problem. The mail key lives on the web
 // app, so the worker asks it to send.
@@ -156,15 +173,15 @@ async function noteAlertFailing(failing: boolean): Promise<void> {
   await (failing ? redis.set(ALERT_FAILING_KEY, "1", "EX", 60 * 60) : redis.del(ALERT_FAILING_KEY)).catch(() => undefined);
 }
 async function systemCheck() {
+  const apiUsage = takeApiUsageReport();
+  if (apiUsage) console.log(`[API usage, last 10 min] ${apiUsage}`);
   try {
     const alerted = await runSystemCheck({
       includeWorker: false,
       deliver: (workspaceId, issues) => postAlert({ workspaceId, issues }),
     });
-    if (alerted > 0) {
-      console.log(`[System check] Mailed ${alerted} problem(s) to the owner`);
-      await noteAlertFailing(false);
-    }
+    if (alerted > 0) console.log(`[System check] Mailed ${alerted} problem(s) to the owner`);
+    await noteAlertFailing(false);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[System check] Failed:", message);
@@ -180,8 +197,6 @@ postAlert({ ping: true })
     console.error("[System check] Alert endpoint not reachable:", error instanceof Error ? error.message : error);
     return noteAlertFailing(true);
   });
-// The baseline for "the cron is late", so a cron that never runs is noticed too.
-void getRedisConnection().set(CRON_LAST_RUN_KEY, String(Date.now()), "NX").catch(() => undefined);
 async function resendMissed() {
   try {
     const count = await resendMissedComments();

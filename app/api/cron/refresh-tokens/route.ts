@@ -3,8 +3,7 @@ import { isCronRequest } from "@/lib/ops/cron-auth";
 import { prisma } from "@/lib/db/client";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
 import { alertSubject, emailWorkspaceOwner } from "@/lib/ops/alert-email";
-import { CRON_LAST_RUN_KEY, runSystemCheck } from "@/lib/ops/system-check";
-import { getRedisConnection } from "@/lib/queue/client";
+import { runSystemCheck } from "@/lib/ops/system-check";
 
 export async function GET(request: NextRequest) {
   if (!isCronRequest(request)) {
@@ -13,8 +12,6 @@ export async function GET(request: NextRequest) {
       { status: 401 }
     );
   }
-
-  await getRedisConnection().set(CRON_LAST_RUN_KEY, String(Date.now()));
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);

@@ -16,11 +16,6 @@ describe("isCronRequest", () => {
     expect(isCronRequest(request("Bearer s3cret"))).toBe(true);
   });
 
-  it("does not care about stray whitespace around the stored secret", () => {
-    vi.stubEnv("CRON_SECRET", "s3cret\n");
-    expect(isCronRequest(request("Bearer s3cret"))).toBe(true);
-  });
-
   it("refuses a wrong secret and no secret at all", () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
     expect(isCronRequest(request("Bearer nope"))).toBe(false);

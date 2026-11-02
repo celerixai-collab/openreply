@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const getDelayed = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed }) }));
-vi.mock("@/lib/db/client", () => ({ prisma: {} }));
+const { getDelayed, getWaiting, getActive, prismaMock } = vi.hoisted(() => ({
+  getDelayed: vi.fn(),
+  getWaiting: vi.fn(),
+  getActive: vi.fn(),
+  prismaMock: { dmLog: { findMany: vi.fn(), updateMany: vi.fn() } },
+}));
+vi.mock("@/lib/queue/client", () => ({ getDMQueue: () => ({ getDelayed, getWaiting, getActive }) }));
+vi.mock("@/lib/db/client", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/contacts/contacts", () => ({ claimOnce: vi.fn(async () => true) }));
 
-import { removeDuplicateDelayedComments } from "@/lib/queue/requeue-throttled";
+import { clearOrphanedRetryMarks, removeDuplicateDelayedComments } from "@/lib/queue/requeue-throttled";
 
 function job(id: string, commentId: string, wakesAt: number, name = "process-comment") {
   return {
@@ -42,5 +47,40 @@ describe("removeDuplicateDelayedComments", () => {
 
     await expect(removeDuplicateDelayedComments()).resolves.toBe(0);
     expect(followUp.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearOrphanedRetryMarks", () => {
+  beforeEach(() => {
+    getDelayed.mockReset().mockResolvedValue([]);
+    getWaiting.mockReset().mockResolvedValue([]);
+    getActive.mockReset().mockResolvedValue([]);
+    prismaMock.dmLog.findMany.mockReset();
+    prismaMock.dmLog.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  });
+
+  it("hands a comment back to the sweep when no job is left for its DM", async () => {
+    getDelayed.mockResolvedValue([job("comment_a_pace_1", "a", 1000), job("comment_b_pub", "b", 1000)]);
+    getActive.mockResolvedValue([job("comment_c", "c", 1000)]);
+    prismaMock.dmLog.findMany.mockResolvedValue([
+      { id: "row-a", commentId: "a" },
+      { id: "row-b", commentId: "b" },
+      { id: "row-c", commentId: "c" },
+    ]);
+
+    await expect(clearOrphanedRetryMarks()).resolves.toBe(1);
+
+    expect(prismaMock.dmLog.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["row-b"] } },
+      data: { errorMessage: null },
+    });
+  });
+
+  it("does nothing when every marked comment has its job", async () => {
+    getWaiting.mockResolvedValue([job("comment_a_pace_1", "a", 1000)]);
+    prismaMock.dmLog.findMany.mockResolvedValue([{ id: "row-a", commentId: "a" }]);
+
+    await expect(clearOrphanedRetryMarks()).resolves.toBe(0);
+    expect(prismaMock.dmLog.updateMany).not.toHaveBeenCalled();
   });
 });

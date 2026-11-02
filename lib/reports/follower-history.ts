@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/client";
 import {
+  createInstagramContext,
   getFollowerCountSeries,
   getUserInfo,
   getZernioFollowerSnapshots,
@@ -216,4 +217,95 @@ export async function ensureFollowerHistory(
   }
 
   return followers;
+}
+
+/**
+ * One follower total per connected account for today. Instagram keeps only about
+ * 30 days of insights, so a day missed beyond that is lost for good.
+ */
+export async function snapshotAllFollowers() {
+  const accounts = await prisma.instagramAccount.findMany({
+    where: {
+      OR: [
+        { provider: "META", accessToken: { not: "" } },
+        { provider: "ZERNIO", zernioAccountId: { not: null } },
+      ],
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      username: true,
+      instagramId: true,
+      accessToken: true,
+      provider: true,
+      zernioAccountId: true,
+    },
+  });
+
+  let recorded = 0;
+  let backfilled = 0;
+  const failures: Array<{ username: string; reason: string }> = [];
+
+  for (const account of accounts) {
+    try {
+      const token = await createInstagramContext(account);
+      if (token.provider === "ZERNIO") {
+        const imported = await backfillFollowerHistory({
+          instagramAccountId: account.id,
+          accessToken: token,
+          instagramId: account.instagramId,
+          currentFollowers: 0,
+        });
+        backfilled += imported;
+        if (imported === 0)
+          failures.push({
+            username: account.username,
+            reason:
+              "Zernio follower history is unavailable or already stored (Analytics add-on required)",
+          });
+        continue;
+      }
+      const info = await getUserInfo({ context: token });
+
+      if (typeof info.followers_count !== "number") {
+        failures.push({
+          username: account.username,
+          reason: "followers_count not returned",
+        });
+        continue;
+      }
+
+      await recordFollowerSnapshot(account.id, info.followers_count);
+      recorded += 1;
+
+      // First time we see this account, try to recover the last 30 days.
+      const existing = await prisma.followerSnapshot.count({
+        where: { instagramAccountId: account.id },
+      });
+      if (existing <= 1) {
+        backfilled += await backfillFollowerHistory({
+          instagramAccountId: account.id,
+          accessToken: token,
+          instagramId: account.instagramId,
+          currentFollowers: info.followers_count,
+        });
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "Unknown error";
+      failures.push({ username: account.username, reason });
+      await prisma.operationalEvent
+        .create({
+          data: {
+            source: "SYSTEM",
+            level: "WARNING",
+            workspaceId: account.workspaceId,
+            message: "Follower snapshot failed",
+            payload: { username: account.username, reason },
+          },
+        })
+        .catch(() => {});
+    }
+  }
+
+  return { accounts: accounts.length, recorded, backfilled, failures };
 }

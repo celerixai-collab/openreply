@@ -37,6 +37,8 @@ export interface ProcessCommentJob {
   // How many times Instagram throttled this comment's private reply; each
   // one is retried later (see throttleRetryDelayMs) instead of failing.
   throttleRetry?: number;
+  // The sending time this job waited for (see reservePaceSlot).
+  paceSlotAt?: number;
   // Which path enqueued this comment. It is not copied to ProcessedComment or
   // used for reconciliation dedup.
   source?: CommentSource;

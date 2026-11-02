@@ -1,7 +1,12 @@
 import { prisma } from "@/lib/db/client";
 import { decryptToken, encryptToken } from "@/lib/meta/oauth";
 import { refreshLongLivedToken } from "@/lib/meta/client";
-import { clearTokenInvalid } from "@/lib/queue/token-pause";
+import { getRedisConnection } from "@/lib/queue/client";
+import {
+  clearTokenInvalid,
+  FIRST_RENEWAL_DAYS_LEFT,
+  TOKEN_RENEWAL_PROVEN_KEY,
+} from "@/lib/queue/token-pause";
 
 // Instagram extends a token that is at least a day old by another 60 days, with
 // no login. Renewing once a month leaves a month to notice one that stops working.
@@ -20,8 +25,9 @@ export type TokenRefreshResult = {
  * must not depend on one scheduler alone.
  */
 export async function refreshExpiringTokens(): Promise<TokenRefreshResult[]> {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() + RENEW_WHEN_DAYS_LEFT);
+  const redis = getRedisConnection();
+  const daysLeft = (await redis.get(TOKEN_RENEWAL_PROVEN_KEY)) ? RENEW_WHEN_DAYS_LEFT : FIRST_RENEWAL_DAYS_LEFT;
+  const cutoffDate = new Date(Date.now() + daysLeft * 24 * 60 * 60 * 1000);
 
   const accountsToRefresh = await prisma.instagramAccount.findMany({
     where: {
@@ -60,6 +66,7 @@ export async function refreshExpiringTokens(): Promise<TokenRefreshResult[]> {
       });
 
       await clearTokenInvalid(account.instagramId);
+      await redis.set(TOKEN_RENEWAL_PROVEN_KEY, new Date().toISOString());
 
       results.push({
         instagramAccountId: account.id,
