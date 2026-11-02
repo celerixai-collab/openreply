@@ -113,3 +113,34 @@ export async function requeueThrottledEverywhere(): Promise<number> {
   return count;
 }
 
+/**
+ * After a reconnect: comments that failed only because the Instagram token had
+ * run out go back to the reconciler, DM and public reply both, at the paced
+ * rate. Nothing was delivered to them. Started by hand, since it can be a large
+ * batch of public replies.
+ */
+export async function requeueExpiredTokenComments(workspaceId: string): Promise<number> {
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      workspaceId,
+      status: "FAILED",
+      publicReplySentAt: null,
+      NOT: { commentId: { startsWith: "reveal:" } },
+      OR: [
+        { errorMessage: { contains: "Session has expired" } },
+        { errorMessage: { contains: "Error validating access token" } },
+      ],
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    data: {
+      status: "PENDING",
+      attempts: 0,
+      dmDeliveryUnconfirmed: false,
+      publicReplyDeliveryUnconfirmed: false,
+      publicReplyError: null,
+      errorMessage: null,
+    },
+  });
+  console.log(`[DM Worker] Re-queued ${count} comments that failed on an expired token`);
+  return count;
+}

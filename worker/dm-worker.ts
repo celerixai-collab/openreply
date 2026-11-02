@@ -5,6 +5,7 @@ import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 import { createAiWorker } from "@/lib/ai/worker";
 import { isAiConfigured } from "@/lib/ai/client";
 import { expireStaleAiDrafts } from "@/lib/ai/drafts";
+import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
@@ -102,11 +103,33 @@ const launchDripTimer = setInterval(() => {
   });
 }, 60_000);
 
+// Instagram tokens, checked here as well as in the Vercel cron: the worker is
+// always running, and a token that runs out stops every campaign.
+const TOKEN_REFRESH_INTERVAL_MS = 6 * 60 * 60_000;
+async function refreshTokens() {
+  try {
+    const results = await refreshExpiringTokens();
+    for (const result of results) {
+      if (result.status === "refreshed") {
+        console.log(`[DM Worker] Refreshed the Instagram token of @${result.username}`);
+      } else {
+        console.error(`[DM Worker] Could not refresh the Instagram token of @${result.username}: ${result.error}`);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[DM Worker] Token refresh failed:", message);
+  }
+}
+setTimeout(() => void refreshTokens(), 30_000);
+const tokenRefreshTimer = setInterval(() => void refreshTokens(), TOKEN_REFRESH_INTERVAL_MS);
+
 async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
   clearInterval(launchDripTimer);
+  clearInterval(tokenRefreshTimer);
   await Promise.all([worker.close(), aiWorker.close()]);
   process.exit(0);
 }

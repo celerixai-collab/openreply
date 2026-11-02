@@ -15,6 +15,14 @@ export function publicReplyGaveUp(publicReplyError: string | null | undefined): 
   return Boolean(publicReplyError?.startsWith(PUBLIC_REPLY_GAVE_UP_MARK));
 }
 
+// The account's Instagram token had run out, so nothing was sent. The comment
+// waits for requeueExpiredTokenComments: the sweep must not retry it on its own
+// after a reconnect, because a spent DM budget would leave it with only the
+// public reply that promises a DM.
+export function failedOnExpiredToken(errorMessage: string | null | undefined): boolean {
+  return /Session has expired|Error validating access token/i.test(errorMessage ?? "");
+}
+
 // A durable, atomic claim precedes the external side effect. If the process
 // crashes or the final log write fails, an uncertain send must not be repeated.
 export async function claimCommentDelivery(

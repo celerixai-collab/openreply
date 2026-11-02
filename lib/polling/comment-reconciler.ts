@@ -25,7 +25,7 @@
  * filter on the account to widen results.
  */
 
-import { MAX_COMMENT_SEND_ATTEMPTS, publicReplyGaveUp, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
+import { failedOnExpiredToken, MAX_COMMENT_SEND_ATTEMPTS, publicReplyGaveUp, SCHEDULED_RETRY_MARK } from "@/lib/queue/comment-delivery";
 import { hasLegacyUnconfirmedDelivery } from "@/lib/instagram/delivery-errors";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue } from "@/lib/queue/client";
@@ -356,6 +356,7 @@ async function sweepCampaign({
       },
     });
     const handledSet = new Set(logs.filter((log) => {
+      if (log.status === "FAILED" && failedOnExpiredToken(log.errorMessage)) return true;
       // SKIPPED_DEDUP: the person (or this comment, through another
       // campaign) already got the DM; sweeping it again would only take a
       // slot from someone still waiting.

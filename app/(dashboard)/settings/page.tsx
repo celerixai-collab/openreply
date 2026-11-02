@@ -128,6 +128,10 @@ export default function SettingsPage() {
   }
 
   const accounts = data?.instagramAccounts ?? [];
+  const [openedAt] = useState(() => Date.now());
+  const tokenExpired = accounts.some(
+    (account) => account.tokenExpiresAt && new Date(account.tokenExpiresAt).getTime() < openedAt
+  );
   const canManageMembers =
     membersData?.currentUserRole === "OWNER" ||
     membersData?.currentUserRole === "ADMIN";
@@ -162,12 +166,12 @@ export default function SettingsPage() {
             </div>
             <span
               className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-                accounts.length > 0
+                accounts.length > 0 && !tokenExpired
                   ? "bg-success/10 text-success"
                   : "bg-warning/10 text-warning"
               }`}
             >
-              {accounts.length > 0 ? t("Connected") : t("Not connected")}
+              {tokenExpired ? t("Expired") : accounts.length > 0 ? t("Connected") : t("Not connected")}
             </span>
           </div>
 
