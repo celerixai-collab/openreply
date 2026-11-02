@@ -387,6 +387,7 @@ export async function queueStrandedComments(): Promise<number> {
     },
     select: {
       id: true,
+      updatedAt: true,
       commentId: true,
       commentText: true,
       commenterId: true,
@@ -397,7 +398,8 @@ export async function queueStrandedComments(): Promise<number> {
   });
   let count = 0;
   for (const row of rows) {
-    if (queued.has(row.commentId) || !(await claimOnce(`stranded:${row.id}`))) continue;
+    // Once per state of the row: one that was reopened since can be stranded again.
+    if (queued.has(row.commentId) || !(await claimOnce(`stranded:${row.id}:${row.updatedAt.getTime()}`))) continue;
     queued.add(row.commentId);
     await queue.add("process-comment", {
       instagramAccountId: row.instagramAccount.instagramId,

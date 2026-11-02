@@ -16,6 +16,7 @@ vi.mock("@/lib/instagram/provider", () => ({ createInstagramContext: vi.fn(async
 vi.mock("@/lib/instagram/read-inbox", () => ({ sentToPersonSince }));
 vi.mock("@/lib/contacts/contacts", () => ({ claimOnce: vi.fn(async () => true) }));
 
+import { claimOnce } from "@/lib/contacts/contacts";
 import { clearOrphanedRetryMarks, settleUnconfirmedDms, queueStrandedComments, removeDuplicateDelayedComments, respaceWaitingComments } from "@/lib/queue/requeue-throttled";
 
 function job(id: string, commentId: string, wakesAt: number, name = "process-comment") {
@@ -174,6 +175,7 @@ describe("settleUnconfirmedDms", () => {
 describe("queueStrandedComments", () => {
   const row = (commentId: string, automation: Record<string, unknown> = { postId: "post1" }) => ({
     id: `row-${commentId}`,
+    updatedAt: new Date(1000),
     commentId,
     commentText: "hi",
     commenterId: "person",
@@ -188,6 +190,14 @@ describe("queueStrandedComments", () => {
     getActive.mockReset().mockResolvedValue([]);
     add.mockReset().mockResolvedValue(undefined);
     prismaMock.dmLog.findMany.mockReset();
+  });
+
+  it("can rescue a row again once it has been reopened", async () => {
+    prismaMock.dmLog.findMany.mockResolvedValue([{ ...row("a"), updatedAt: new Date(2000) }]);
+
+    await queueStrandedComments();
+
+    expect(claimOnce).toHaveBeenCalledWith("stranded:row-a:2000");
   });
 
   it("queues a waiting comment that has no job, from its own row", async () => {
