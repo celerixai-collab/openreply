@@ -21,6 +21,7 @@ import {
   resendMissedComments,
   requeueThrottledComments,
   requeueThrottledEverywhere,
+  retestNotFoundOnce,
 } from "@/lib/queue/requeue-throttled";
 import os from "node:os";
 
@@ -41,6 +42,12 @@ console.log("[DM Worker] Started");
 void requeueThrottledEverywhere().catch((error) =>
   console.error(
     "[DM Worker] Re-queueing throttled comments failed:",
+    error instanceof Error ? error.message : error
+  )
+);
+void retestNotFoundOnce().catch((error) =>
+  console.error(
+    "[DM Worker] Retesting refused comments failed:",
     error instanceof Error ? error.message : error
   )
 );

@@ -119,6 +119,26 @@ export async function requeueThrottledEverywhere(): Promise<number> {
 }
 
 /**
+ * One-time retest (2026-11-02). "Cannot be found" jumped to about 10% of sends,
+ * and some of those people got another DM within the hour, so it may not mean
+ * they are gone. Each is tried once more: a throttle would now go through.
+ */
+export async function retestNotFoundOnce(): Promise<number> {
+  if (!(await claimOnce("retest-not-found-2026-11-02"))) return 0;
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      status: "FAILED",
+      NOT: { commentId: { startsWith: "reveal:" } },
+      errorMessage: { contains: "requested user cannot be found" },
+      updatedAt: { gt: new Date("2026-11-02T13:00:00Z") },
+    },
+    data: { status: "PENDING", attempts: 0, errorMessage: null },
+  });
+  console.log(`[DM Worker] Retesting ${count} comments refused as "cannot be found"`);
+  return count;
+}
+
+/**
  * Comments that failed only because the Instagram token had
  * run out go back to the reconciler, DM and public reply both, at the paced
  * rate. Nothing was delivered to them.
