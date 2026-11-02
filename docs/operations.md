@@ -32,11 +32,13 @@ makes GitHub email the owner; this was tested on 2026-11-02.
 | 3 DMs a minute (2026-10-29 to the outage) | Stable |
 | 12 DMs and 12 public replies a minute (2026-11-02) | Limit hit within 8 minutes |
 | 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 11 minutes, exactly 200 DMs into the rolling hour |
+| 6 DMs a minute with no hourly cap, as a test (2026-11-02) | Throttled again at about 200 in the rolling hour, `code=100 sub=2534001` |
 
-`DM_PACE_PER_MINUTE=2.5`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`, `DM_HOURLY_BUDGET` 180 by
-default, under the 200 seen above. A comment from a webhook has its own line, 10 seconds
-apart and up to the full budget. Everything else waits in the backlog, which stops 30 short
-of the budget so it never holds up a new comment. Meta documents 750 private replies an hour, and other tools report
+So this account's limit is about 200 private replies in a rolling hour, and Instagram
+reports it as `thread does not exist`, not as a rate limit. `DM_PACE_PER_MINUTE=3`,
+`PUBLIC_REPLY_PACE_PER_MINUTE=2`, `DM_HOURLY_BUDGET=190`. A comment from a webhook has its
+own line, 10 seconds apart and up to the full budget. Everything else waits in the backlog,
+which stops 30 short of the budget so it never holds up a new comment. Meta documents 750 private replies an hour, and other tools report
 running near it, so this account's limit is lower than the documented one for a reason not
 yet known. Raising the pace needs evidence, not hope: the throttle log line carries the
 error code, and the worker logs `[API usage, last 10 min]`, with what the calls were spent on
