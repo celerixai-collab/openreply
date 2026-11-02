@@ -87,6 +87,8 @@ Before pushing:
 
 - Chain with `&&`, never `;`. A failed `git add` followed by `;` once pushed a commit
   without its code, and a failed lint once let a broken page through.
+- Never pipe a check before `&&`: `npm run verify | tail && git push` pushes when the
+  check fails, because `&&` sees `tail`'s result. This pushed a type error on 2026-11-02.
 - Read `git show --stat HEAD`.
 - Pushing a workflow file needs the `workflow` scope: use
   `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.

@@ -228,7 +228,7 @@ export async function respaceWaitingComments(): Promise<number> {
     const times = await restartPaceLine(instagramAccountId, line.length);
     for (const [i, job] of line.entries()) {
       try {
-        await job.updateData({ ...job.data, paceSlotAt: times[i] });
+        await job.updateData({ ...job.data, paceSlotAt: times[i] } as never);
         await job.changeDelay(times[i] - Date.now());
         moved += 1;
       } catch {
