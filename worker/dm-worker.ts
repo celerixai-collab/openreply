@@ -13,6 +13,7 @@ import { getBaseUrl } from "@/lib/env";
 import { runLaunchDripTick } from "@/lib/launch/launch-drip";
 import {
   markRefusedRepeatsDelivered,
+  removeDuplicateDelayedComments,
   requeuePersonDedupSkips,
   resendMissedComments,
   requeueThrottledComments,
@@ -49,6 +50,12 @@ void markRefusedRepeatsDelivered().catch((error) =>
 void requeuePersonDedupSkips().catch((error) =>
   console.error(
     "[DM Worker] Re-queueing repeat comments failed:",
+    error instanceof Error ? error.message : error
+  )
+);
+void removeDuplicateDelayedComments().catch((error) =>
+  console.error(
+    "[DM Worker] Removing duplicate waiting jobs failed:",
     error instanceof Error ? error.message : error
   )
 );

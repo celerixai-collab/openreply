@@ -359,6 +359,9 @@ async function sweepCampaign({
       },
     });
     const handledSet = new Set(logs.filter((log) => {
+      // A job is already waiting for this comment, and it does both the DM and
+      // the public reply; another would only pile up copies.
+      if (hasScheduledRetry(log)) return true;
       // SKIPPED_DEDUP: the person (or this comment, through another
       // campaign) already got the DM; sweeping it again would only take a
       // slot from someone still waiting.

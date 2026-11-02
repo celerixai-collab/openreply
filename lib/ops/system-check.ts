@@ -126,6 +126,7 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
       status: { in: ["PENDING", "FAILED"] },
       publicReplySentAt: { lt: new Date(now - REPLIED_NO_DM_AFTER_MS), gt: new Date(now - 7 * DAY_MS) },
       NOT: [
+        { errorMessage: { startsWith: "Retry scheduled:" } },
         { errorMessage: { contains: "cannot be found" } },
         { errorMessage: { contains: "outside of allowed window" } },
       ],

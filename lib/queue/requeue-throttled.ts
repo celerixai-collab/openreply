@@ -10,6 +10,7 @@
 
 import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
+import { getDMQueue } from "@/lib/queue/client";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
 const CAMPAIGN_IDS = ["cmvgv55ce000208l5mzi3maff", "cmvgv5uv6000307jybnpiejoe"];
@@ -171,6 +172,30 @@ export async function requeueUnconfirmedDms(workspaceId: string): Promise<number
     count += 1;
   }
   return count;
+}
+
+/**
+ * One-time clean-up (2026-11-02): the sweep queued a new job for a waiting comment
+ * every few minutes while its public reply was owed. Copies also stretch the
+ * delays, since waiting jobs are spread over more minutes. Keep one job for each
+ * comment, spread over the next hour.
+ */
+export async function removeDuplicateDelayedComments(): Promise<number> {
+  if (!(await claimOnce("dedupe-delayed-comments-2026-11-02"))) return 0;
+  const seen = new Set<string>();
+  let removed = 0;
+  for (const job of await getDMQueue().getDelayed(0, -1)) {
+    if (job.name !== "process-comment" || !("commentId" in job.data)) continue;
+    if (seen.has(job.data.commentId)) {
+      await job.remove();
+      removed += 1;
+    } else {
+      seen.add(job.data.commentId);
+      await job.changeDelay(Math.floor(Math.random() * 60 * 60_000));
+    }
+  }
+  console.log(`[DM Worker] Removed ${removed} duplicate waiting jobs, kept ${seen.size}`);
+  return removed;
 }
 
 /** The worker's automatic re-send of everything that can still be delivered. */

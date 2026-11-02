@@ -188,6 +188,25 @@ describe("comment polling does not recreate unsafe sends", () => {
     expect(queueAdd.mock.calls[0][1].commentId).toBe("new");
   });
 
+  it("does not queue a waiting comment again while its public reply is owed", async () => {
+    mockPrisma.dmLog.findMany.mockResolvedValue([
+      {
+        commentId: "old",
+        status: "PENDING",
+        attempts: 0,
+        dmDeliveryUnconfirmed: false,
+        errorMessage: "Retry scheduled: paced to protect the account",
+        updatedAt: new Date(),
+        publicReplySentAt: null,
+      },
+    ]);
+    mockPrisma.automation.findMany.mockResolvedValue(
+      (await mockPrisma.automation.findMany()).map((a: object) => ({ ...a, publicReplyEnabled: true }))
+    );
+    await reconcileComments();
+    expect(queueAdd.mock.calls.map((c: unknown[]) => (c[1] as { commentId: string }).commentId)).not.toContain("old");
+  });
+
   it("does not sweep a comment skipped because the person already got the DM", async () => {
     mockPrisma.dmLog.findMany.mockResolvedValue([
       { commentId: "old", status: "SKIPPED_DEDUP", attempts: 0, dmDeliveryUnconfirmed: false, updatedAt: new Date(), publicReplySentAt: null },
