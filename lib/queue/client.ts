@@ -39,6 +39,8 @@ export interface ProcessCommentJob {
   throttleRetry?: number;
   // The sending time this job waited for (see reservePaceSlot).
   paceSlotAt?: number;
+  // That sending time is in the line for comments that just arrived.
+  liveLine?: boolean;
   // Which path enqueued this comment. It is not copied to ProcessedComment or
   // used for reconciliation dedup.
   source?: CommentSource;

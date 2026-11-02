@@ -660,8 +660,31 @@ describe("DM Worker — Full Pipeline", () => {
 
     mockQueueAdd.mockClear();
     await getProcessor()(createMockJob({ ...mockJobData, paceSlotAt: 999 }));
-    expect(mockReservePaceSlot).toHaveBeenLastCalledWith("ig_456", 999);
+    expect(mockReservePaceSlot).toHaveBeenLastCalledWith("ig_456", 999, false);
     expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a webhook comment", { source: "WEBHOOK" }, undefined, true],
+    ["a comment the sweep found", { source: "POLLING" }, undefined, false],
+    ["a throttled comment trying again", { source: "WEBHOOK", throttleRetry: 1 }, undefined, false],
+    ["a webhook comment already waiting in the backlog", { source: "WEBHOOK", paceSlotAt: 999 }, 999, false],
+    ["a comment waiting in the new-comment line", { source: "WEBHOOK", paceSlotAt: 999, liveLine: true }, 999, true],
+  ])("treats %s correctly", async (_name, data, held, live) => {
+    await getProcessor()(createMockJob({ ...mockJobData, ...data }));
+    expect(mockReservePaceSlot).toHaveBeenLastCalledWith("ig_456", held, live);
+  });
+
+  it("keeps a new comment in its own line while it waits", async () => {
+    mockReservePaceSlot.mockResolvedValueOnce({ allowed: false, retryInMs: 10_000, slotAt: 999 });
+
+    await getProcessor()(createMockJob({ ...mockJobData, source: "WEBHOOK" }));
+
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-comment",
+      expect.objectContaining({ paceSlotAt: 999, liveLine: true }),
+      expect.objectContaining({ delay: 10_000 })
+    );
   });
 
   it("queues one waiting job for a comment however many campaigns it matched", async () => {

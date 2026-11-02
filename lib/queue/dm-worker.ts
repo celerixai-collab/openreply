@@ -180,6 +180,13 @@ function isTemplateRejection(error: unknown): boolean {
     !NON_TEMPLATE_REJECTIONS.some((pattern) => pattern.test(error.message));
 }
 
+// Webhooks deliver a comment as it is written. The sweep's finds and retries are
+// not urgent, and neither is a job that is already waiting in the backlog.
+function isLiveComment(data: ProcessCommentJob): boolean {
+  if (data.paceSlotAt !== undefined) return data.liveLine === true;
+  return data.source === "WEBHOOK" && !data.throttleRetry && !data.requeueAttempt;
+}
+
 type WorkerTrackedLink = {
   slug: string;
   label: string | null;
@@ -669,9 +676,10 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
     // Pace private replies per minute, and hold them while the account cools
     // down after Instagram throttled it. A held comment is not a failure: it
     // waits in the queue and keeps its place in line.
+    const live = isLiveComment(job.data);
     let pace: PaceResult;
     try {
-      pace = paceHold ?? (await reservePaceSlot(instagramAccountId, job.data.paceSlotAt));
+      pace = paceHold ?? (await reservePaceSlot(instagramAccountId, job.data.paceSlotAt, live));
     } catch (error) {
       console.warn("[DM Worker] Pacing unavailable, sending anyway:", formatError(error));
       pace = { allowed: true };
@@ -687,7 +695,7 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
         },
       });
       if (!paceHold) {
-        await getDMQueue().add("process-comment", { ...job.data, paceSlotAt: pace.slotAt }, {
+        await getDMQueue().add("process-comment", { ...job.data, paceSlotAt: pace.slotAt, liveLine: live }, {
           delay: pace.retryInMs,
           jobId: `comment_${instagramAccountId}_${commentId}_pace_${Date.now()}`,
         });

@@ -165,22 +165,32 @@ describe("releaseDMSlot", () => {
 
 describe("reservePaceSlot", () => {
   const NOW = 1_800_000_000_000;
+  let hourlyBudgetLeft: boolean;
+  const slotIs = (at: number) =>
+    mockEval.mockImplementation(async (script: string) =>
+      script.includes("ZCARD") ? (hourlyBudgetLeft ? 1 : 0) : String(at)
+    );
+  const budgetCalls = () =>
+    mockEval.mock.calls.filter(([script]) => (script as string).includes("ZCARD"));
+  const slotCalls = () =>
+    mockEval.mock.calls.filter(([script]) => !(script as string).includes("ZCARD"));
 
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
+    hourlyBudgetLeft = true;
     mockPttl.mockReset().mockResolvedValue(-2);
     mockSet.mockReset().mockResolvedValue("OK");
     mockEval.mockReset();
+    slotIs(NOW);
   });
   afterEach(() => vi.restoreAllMocks());
 
   it("sends right away when nobody is ahead", async () => {
-    mockEval.mockResolvedValue(String(NOW));
     await expect(reservePaceSlot("ig")).resolves.toEqual({ allowed: true });
   });
 
   it("gives a later comment its own place in line, ten seconds apart at six a minute", async () => {
-    mockEval.mockResolvedValue(String(NOW + 30_000));
+    slotIs(NOW + 30_000);
     await expect(reservePaceSlot("ig")).resolves.toEqual({
       allowed: false,
       retryInMs: 30_000,
@@ -191,12 +201,12 @@ describe("reservePaceSlot", () => {
 
   it("lets a job through on the place it already waited for, without taking another", async () => {
     await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({ allowed: true });
-    expect(mockEval).not.toHaveBeenCalled();
+    expect(slotCalls()).toHaveLength(0);
   });
 
   it("sends a job holding an old, closer-spaced place to the back when the last send was too recent", async () => {
     mockSet.mockResolvedValue(null);
-    mockEval.mockResolvedValue(String(NOW + 40_000));
+    slotIs(NOW + 40_000);
     await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({
       allowed: false,
       retryInMs: 40_000,
@@ -205,19 +215,73 @@ describe("reservePaceSlot", () => {
   });
 
   it("takes a new place when the job woke long after its slot, so a stopped worker does not cause a burst", async () => {
-    mockEval.mockResolvedValue(String(NOW + 10_000));
+    slotIs(NOW + 10_000);
     await expect(reservePaceSlot("ig", NOW - 5 * 60_000)).resolves.toMatchObject({ allowed: false });
-    expect(mockEval).toHaveBeenCalledTimes(1);
+    expect(slotCalls()).toHaveLength(1);
   });
 
   it("holds everyone, also a job on its slot, until the cooldown ends", async () => {
     mockPttl.mockResolvedValue(60_000);
-    mockEval.mockResolvedValue(String(NOW + 60_000));
+    slotIs(NOW + 60_000);
     await expect(reservePaceSlot("ig", NOW - 500)).resolves.toEqual({
       allowed: false,
       retryInMs: 60_000,
       slotAt: NOW + 60_000,
     });
     expect(mockEval).toHaveBeenCalledWith(expect.any(String), 1, "pace:next:ig", NOW + 60_000, 10_000);
+  });
+
+  describe("comments that just arrived", () => {
+    it("have their own line, so a backlog does not delay them", async () => {
+      await expect(reservePaceSlot("ig", undefined, true)).resolves.toEqual({ allowed: true });
+      expect(mockEval).toHaveBeenCalledWith(expect.any(String), 1, "pace:live:ig", NOW, 10_000);
+      expect(mockEval).not.toHaveBeenCalledWith(expect.any(String), 1, "pace:next:ig", NOW, 10_000);
+    });
+
+    it("wait their turn in that line during a burst", async () => {
+      slotIs(NOW + 20_000);
+      await expect(reservePaceSlot("ig", undefined, true)).resolves.toEqual({
+        allowed: false,
+        retryInMs: 20_000,
+        slotAt: NOW + 20_000,
+      });
+    });
+
+    it("are not held back by the gap that spaces out the backlog", async () => {
+      mockSet.mockResolvedValue(null);
+      await expect(reservePaceSlot("ig", NOW - 500, true)).resolves.toEqual({ allowed: true });
+    });
+
+    it("still wait for a cooldown to end", async () => {
+      mockPttl.mockResolvedValue(60_000);
+      slotIs(NOW + 60_000);
+      await expect(reservePaceSlot("ig", NOW - 500, true)).resolves.toEqual({
+        allowed: false,
+        retryInMs: 60_000,
+        slotAt: NOW + 60_000,
+      });
+    });
+  });
+
+  describe("the hourly budget", () => {
+    it("keeps part of the hour for new comments: 180 for them, 150 for the backlog", async () => {
+      await reservePaceSlot("ig", undefined, true);
+      expect(budgetCalls()[0].slice(2, 6)).toEqual(["pace:sent:ig", NOW, 3_600_000, 180]);
+      mockEval.mockClear();
+      await reservePaceSlot("ig", NOW - 500);
+      expect(budgetCalls()[0].slice(2, 6)).toEqual(["pace:sent:ig", NOW, 3_600_000, 150]);
+    });
+
+    it.each([
+      ["a comment holding its place", NOW - 500, false],
+      ["a new comment", undefined, true],
+    ])("makes %s try again in a minute once it is used up", async (_name, held, live) => {
+      hourlyBudgetLeft = false;
+      await expect(reservePaceSlot("ig", held, live)).resolves.toEqual({
+        allowed: false,
+        retryInMs: 60_000,
+        slotAt: NOW + 60_000,
+      });
+    });
   });
 });

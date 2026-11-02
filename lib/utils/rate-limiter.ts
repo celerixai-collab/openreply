@@ -302,6 +302,26 @@ const PACE_SLOT_VALID_MS = 2 * 60_000;
 // Below the spacing because delayed jobs wake a few seconds early or late.
 const PACE_MIN_GAP_MS = Math.floor(PACE_SPACING_MS * 0.7);
 
+// Instagram refused private replies 200 into a rolling hour on 2026-11-02, well
+// under Meta's documented 750, so the hour itself is capped. The backlog stops
+// short of the cap, which leaves room for comments that just arrived.
+const HOURLY_BUDGET = Number(process.env.DM_HOURLY_BUDGET ?? 180);
+const LIVE_RESERVE = 30;
+const HOUR_MS = 60 * 60_000;
+const BUDGET_RETRY_MS = 60_000;
+// 6 a minute is the fastest that held while the hour stayed under the limit.
+const LIVE_SPACING_MS = 10_000;
+
+const TAKE_HOURLY_BUDGET_SCRIPT = `
+redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", string.format("%.0f", tonumber(ARGV[1]) - tonumber(ARGV[2])))
+if redis.call("ZCARD", KEYS[1]) >= tonumber(ARGV[3]) then
+  return 0
+end
+redis.call("ZADD", KEYS[1], ARGV[1], ARGV[4])
+redis.call("EXPIRE", KEYS[1], 7200)
+return 1
+`;
+
 export type PaceResult =
   | { allowed: true }
   | { allowed: false; retryInMs: number; slotAt: number };
@@ -310,13 +330,33 @@ export type PaceResult =
  * Give a private reply its place in line, unless the account is cooling down
  * after Instagram throttled it. A job that already waited for its place passes
  * it back as `heldSlotAt` and goes through without taking another.
+ *
+ * `live` is a comment that just arrived. It has a line of its own: the person
+ * is waiting for it now, while the backlog has days left to go out.
  */
 export async function reservePaceSlot(
   instagramAccountId: string,
-  heldSlotAt?: number
+  heldSlotAt?: number,
+  live = false
 ): Promise<PaceResult> {
   const client = getRedis();
   const now = Date.now();
+  const takeBudget = async (): Promise<PaceResult> => {
+    const taken = toScriptNumber(
+      await client.eval(
+        TAKE_HOURLY_BUDGET_SCRIPT,
+        1,
+        `pace:sent:${instagramAccountId}`,
+        now,
+        HOUR_MS,
+        live ? HOURLY_BUDGET : HOURLY_BUDGET - LIVE_RESERVE,
+        `${now}:${Math.random()}`
+      )
+    );
+    return taken === 1
+      ? { allowed: true }
+      : { allowed: false, retryInMs: BUDGET_RETRY_MS, slotAt: now + BUDGET_RETRY_MS };
+  };
   const cooldownLeft = Math.max(0, await client.pttl(`cooldown:dm:${instagramAccountId}`));
   if (
     cooldownLeft === 0 &&
@@ -325,22 +365,22 @@ export async function reservePaceSlot(
     now - heldSlotAt < PACE_SLOT_VALID_MS &&
     // A floor under the slots: places handed out before the pace was lowered do
     // not get to send at the old speed.
-    (await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS, "NX"))
+    (live || (await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS, "NX")))
   ) {
-    return { allowed: true };
+    return takeBudget();
   }
   const slotAt = toScriptNumber(
     await client.eval(
       NEXT_PACE_SLOT_SCRIPT,
       1,
-      `pace:next:${instagramAccountId}`,
+      `${live ? "pace:live" : "pace:next"}:${instagramAccountId}`,
       now + cooldownLeft,
-      PACE_SPACING_MS
+      live ? LIVE_SPACING_MS : PACE_SPACING_MS
     )
   );
   if (slotAt <= now) {
-    await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS);
-    return { allowed: true };
+    if (!live) await client.set(`pace:gap:${instagramAccountId}`, "1", "PX", PACE_MIN_GAP_MS);
+    return takeBudget();
   }
   return { allowed: false, retryInMs: slotAt - now, slotAt };
 }

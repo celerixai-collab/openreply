@@ -33,8 +33,10 @@ makes GitHub email the owner; this was tested on 2026-11-02.
 | 12 DMs and 12 public replies a minute (2026-11-02) | Limit hit within 8 minutes |
 | 6 DMs a minute, evenly spaced (2026-11-02) | Throttled after about 11 minutes, exactly 200 DMs into the rolling hour |
 
-`DM_PACE_PER_MINUTE=3`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`. 3 a minute is 180 an hour, under
-the 200 seen above. Meta documents 750 private replies an hour, and other tools report
+`DM_PACE_PER_MINUTE=2.5`, `PUBLIC_REPLY_PACE_PER_MINUTE=2`, `DM_HOURLY_BUDGET` 180 by
+default, under the 200 seen above. A comment from a webhook has its own line, 10 seconds
+apart and up to the full budget. Everything else waits in the backlog, which stops 30 short
+of the budget so it never holds up a new comment. Meta documents 750 private replies an hour, and other tools report
 running near it, so this account's limit is lower than the documented one for a reason not
 yet known. Raising the pace needs evidence, not hope: the throttle log line carries the
 error code, and the worker logs `[API usage, last 10 min]`, with what the calls were spent on
@@ -42,7 +44,7 @@ and the usage Instagram reports. The app usage it reports stayed at 0 while DMs 
 being throttled, so this limit is not the app's call allowance. `[code=...]` in an error
 says which limit it was: code 4 on public replies is `Application request limit reached`.
 
-Comments wait in order: each gets a sending time one spacing apart (`reservePaceSlot`),
+The backlog waits in order: each comment gets a sending time one spacing apart (`reservePaceSlot`),
 with a minimum gap under it so a lowered pace also applies to jobs already waiting. The
 DM does not wait for the public reply.
 
