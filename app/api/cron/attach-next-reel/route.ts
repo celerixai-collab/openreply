@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isCronRequest } from "@/lib/ops/cron-auth";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 
 /**
@@ -12,10 +13,7 @@ import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
  */
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET || process.env.NEXTAUTH_SECRET;
-
-  if (authHeader !== `Bearer ${cronSecret}`) {
+  if (!isCronRequest(request)) {
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
       { status: 401 }

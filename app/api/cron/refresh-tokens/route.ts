@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isCronRequest } from "@/lib/ops/cron-auth";
 import { prisma } from "@/lib/db/client";
 import { refreshExpiringTokens } from "@/lib/instagram/token-refresh";
 import { alertSubject, emailWorkspaceOwner } from "@/lib/ops/alert-email";
@@ -6,10 +7,7 @@ import { CRON_LAST_RUN_KEY, runSystemCheck } from "@/lib/ops/system-check";
 import { getRedisConnection } from "@/lib/queue/client";
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET || process.env.NEXTAUTH_SECRET;
-
-  if (authHeader !== `Bearer ${cronSecret}`) {
+  if (!isCronRequest(request)) {
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
       { status: 401 }

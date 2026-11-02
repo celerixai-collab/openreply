@@ -604,6 +604,10 @@ async function runCommentCampaigns(job: Job<ProcessCommentJob>): Promise<void> {
     };
     await postPublicReply();
 
+    // A public-reply retry: the job that queued it looks after the DM. Taking
+    // the DM here as well gave a waiting comment one more job on every retry.
+    if (job.id?.endsWith("_pub")) continue;
+
     // DM already sent on an earlier pass; the public reply above was all this
     // run needed. Don't re-send the DM.
     if (!needsDm) continue;

@@ -175,26 +175,26 @@ export async function requeueUnconfirmedDms(workspaceId: string): Promise<number
 }
 
 /**
- * One-time clean-up (2026-11-02): the sweep queued a new job for a waiting comment
- * every few minutes while its public reply was owed. Copies also stretch the
- * delays, since waiting jobs are spread over more minutes. Keep one job for each
- * comment, spread over the next hour.
+ * Run at every start: a waiting comment needs one job for its DM and at most one
+ * for its public reply. Copies stretch everyone's wait, since waiting jobs are
+ * spread over more minutes. The copy that wakes first stays.
  */
 export async function removeDuplicateDelayedComments(): Promise<number> {
-  if (!(await claimOnce("dedupe-delayed-comments-2026-11-02"))) return 0;
+  const jobs = await getDMQueue().getDelayed(0, -1);
+  jobs.sort((a, b) => a.timestamp + a.delay - (b.timestamp + b.delay));
   const seen = new Set<string>();
   let removed = 0;
-  for (const job of await getDMQueue().getDelayed(0, -1)) {
+  for (const job of jobs) {
     if (job.name !== "process-comment" || !("commentId" in job.data)) continue;
-    if (seen.has(job.data.commentId)) {
+    const key = `${job.data.commentId}:${job.id?.endsWith("_pub") ? "public" : "dm"}`;
+    if (seen.has(key)) {
       await job.remove();
       removed += 1;
     } else {
-      seen.add(job.data.commentId);
-      await job.changeDelay(Math.floor(Math.random() * 60 * 60_000));
+      seen.add(key);
     }
   }
-  console.log(`[DM Worker] Removed ${removed} duplicate waiting jobs, kept ${seen.size}`);
+  if (removed > 0) console.log(`[DM Worker] Removed ${removed} duplicate waiting jobs, kept ${seen.size}`);
   return removed;
 }
 

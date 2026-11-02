@@ -179,7 +179,7 @@ const tokenPause = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/queue/token-pause", () => tokenPause);
 
-import { MetaApiError, RateLimitError, TokenExpiredError } from "@/lib/meta/client";
+import { MetaApiError, RateLimitError, sendCommentReply, TokenExpiredError } from "@/lib/meta/client";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
@@ -645,6 +645,20 @@ describe("DM Worker — Full Pipeline", () => {
       expect.objectContaining({ commentId: "comment_555" }),
       expect.objectContaining({ delay: 42_000 })
     );
+  });
+
+  it("a public-reply retry leaves the DM to the comment's own job, so waiting comments do not multiply", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...mockAutomation, publicReplyEnabled: true, publicReplyMessages: ["sent you the link"] },
+    ]);
+    mockReservePaceSlot.mockResolvedValue({ allowed: false, retryInMs: 42_000 });
+
+    await getProcessor()({ ...createMockJob(), id: "comment_ig_456_comment_555_pub" });
+
+    mockReservePaceSlot.mockResolvedValue({ allowed: true });
+    expect(vi.mocked(sendCommentReply)).toHaveBeenCalledTimes(1);
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
   });
 
   it("DMs every comment, also a person's second one", async () => {
