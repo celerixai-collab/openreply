@@ -10,6 +10,7 @@
 
 import { prisma } from "@/lib/db/client";
 import { claimOnce } from "@/lib/contacts/contacts";
+import { getDMQueue, POSTBACK_JOB_NAME } from "@/lib/queue/client";
 
 // The two "剪輯室 早鳥等候" campaigns of 2026-10-20.
 const CAMPAIGN_IDS = ["cmvgv55ce000208l5mzi3maff", "cmvgv5uv6000307jybnpiejoe"];
@@ -143,4 +144,67 @@ export async function requeueExpiredTokenComments(workspaceId: string): Promise<
   });
   console.log(`[DM Worker] Re-queued ${count} comments that failed on an expired token`);
   return count;
+}
+
+/**
+ * Comments that got their public reply while the DM's delivery was left
+ * unconfirmed. Safe to send again: Instagram allows one private reply per
+ * comment, so a repeat either delivers the lost one or is refused.
+ */
+export async function requeueUnconfirmedDms(workspaceId: string): Promise<number> {
+  const { count } = await prisma.dmLog.updateMany({
+    where: {
+      workspaceId,
+      status: "FAILED",
+      publicReplySentAt: { not: null },
+      NOT: { commentId: { startsWith: "reveal:" } },
+      errorMessage: { contains: "delivery is unconfirmed" },
+      createdAt: { gt: new Date(Date.now() - MAX_AGE_MS) },
+    },
+    data: { status: "PENDING", attempts: 0, dmDeliveryUnconfirmed: false, errorMessage: null },
+  });
+  console.log(`[DM Worker] Re-queued ${count} replied-to comments whose DM was unconfirmed`);
+  return count;
+}
+
+// Instagram's 24-hour window after a button tap, with a margin.
+const TAP_WINDOW_MS = 23 * 60 * 60 * 1000;
+
+/**
+ * Button taps from the last day whose link failed on an expired token. Older
+ * taps are outside the window Instagram allows, so they wait for the next tap.
+ */
+export async function requeueExpiredTokenTaps(workspaceId: string): Promise<number> {
+  const taps = await prisma.dmLog.findMany({
+    where: {
+      workspaceId,
+      status: "FAILED",
+      commentId: { startsWith: "reveal:" },
+      errorMessage: { contains: "Session has expired" },
+      updatedAt: { gt: new Date(Date.now() - TAP_WINDOW_MS) },
+    },
+    select: {
+      id: true,
+      automationId: true,
+      commenterId: true,
+      automation: {
+        select: { instagramAccountId: true, instagramAccount: { select: { instagramId: true } } },
+      },
+    },
+  });
+  for (const tap of taps) {
+    await getDMQueue().add(
+      POSTBACK_JOB_NAME,
+      {
+        accountConnectionId: tap.automation.instagramAccountId,
+        instagramAccountId: tap.automation.instagramAccount.instagramId,
+        userId: tap.commenterId,
+        payload: `reveal:${tap.automationId}`,
+        mid: `token-rescue:${tap.id}`,
+      },
+      { jobId: `token-rescue_${tap.id}` }
+    );
+  }
+  console.log(`[DM Worker] Re-queued ${taps.length} button taps that failed on an expired token`);
+  return taps.length;
 }

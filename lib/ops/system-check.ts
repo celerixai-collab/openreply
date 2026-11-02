@@ -51,7 +51,12 @@ export async function checkWorkspace(workspaceId: string): Promise<SystemIssue[]
     }
   }
 
-  const refreshFailure = await prisma.operationalEvent.findFirst({
+  // A failed renewal only matters while the token is near its end; a reconnect
+  // clears it.
+  const renewalDue = accounts.some(
+    (a) => a.tokenExpiresAt && a.tokenExpiresAt.getTime() < now + 10 * DAY_MS
+  );
+  const refreshFailure = renewalDue && await prisma.operationalEvent.findFirst({
     where: {
       workspaceId,
       source: "TOKEN_REFRESH",

@@ -87,3 +87,16 @@ describe("system check", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 });
+
+describe("token refresh failures", () => {
+  it("are ignored once the token has plenty of time left", async () => {
+    prismaMock.instagramAccount.findMany.mockResolvedValue([account(50)]);
+    prismaMock.operationalEvent.findFirst.mockResolvedValue({ message: "old failure" });
+    prismaMock.dmLog.count.mockResolvedValue(0);
+    prismaMock.webhookEvent.count.mockResolvedValue(0);
+    expect(await checkWorkspace("w1")).toEqual([]);
+
+    prismaMock.instagramAccount.findMany.mockResolvedValue([account(8)]);
+    expect((await checkWorkspace("w1")).map((i) => i.id)).toEqual(["token-refresh-failed"]);
+  });
+});

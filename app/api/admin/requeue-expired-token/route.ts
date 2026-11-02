@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getCurrentWorkspaceId } from "@/lib/auth";
-import { requeueExpiredTokenComments } from "@/lib/queue/requeue-throttled";
+import {
+  requeueExpiredTokenComments,
+  requeueExpiredTokenTaps,
+  requeueUnconfirmedDms,
+} from "@/lib/queue/requeue-throttled";
 
 export const runtime = "nodejs";
 
@@ -14,5 +18,7 @@ export async function POST() {
   }
 
   const requeued = await requeueExpiredTokenComments(workspaceId);
-  return NextResponse.json({ success: true, data: { requeued } });
+  const unconfirmedDms = await requeueUnconfirmedDms(workspaceId);
+  const buttonTaps = await requeueExpiredTokenTaps(workspaceId);
+  return NextResponse.json({ success: true, data: { requeued, unconfirmedDms, buttonTaps } });
 }
