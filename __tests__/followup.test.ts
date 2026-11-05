@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockPrisma, mockQueue, mockIsAiPaused } = vi.hoisted(() => ({
+const { mockPrisma, mockQueue, mockIsAiPaused, mockNudgesRunning } = vi.hoisted(() => ({
   mockPrisma: {
     aiAssistant: { findUnique: vi.fn() },
     contact: { findFirst: vi.fn() },
@@ -10,10 +10,12 @@ const { mockPrisma, mockQueue, mockIsAiPaused } = vi.hoisted(() => ({
   },
   mockQueue: { add: vi.fn(), getJob: vi.fn() },
   mockIsAiPaused: vi.fn(),
+  mockNudgesRunning: vi.fn(),
 }));
 
 vi.mock("@/lib/db/client", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/ai/takeover", () => ({ isAiPaused: mockIsAiPaused, isConversationEnded: async () => false }));
+vi.mock("@/lib/ai/nudges", () => ({ nudgesRunningFor: mockNudgesRunning }));
 vi.mock("@/lib/queue/client", () => ({
   getDMQueue: () => mockQueue,
   FOLLOWUP_JOB_NAME: "process-followup",
@@ -36,6 +38,7 @@ beforeEach(() => {
   mockPrisma.aiAssistant.findUnique.mockResolvedValue(null);
   mockPrisma.aiDraft.findFirst.mockResolvedValue(null);
   mockIsAiPaused.mockResolvedValue(false);
+  mockNudgesRunning.mockResolvedValue(false);
   mockPrisma.linkClick.findFirst.mockResolvedValue(null);
 });
 
@@ -89,6 +92,12 @@ describe("followUpBlockedReason", () => {
   it("skips a conversation the creator took over", async () => {
     mockIsAiPaused.mockResolvedValue(true);
     expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toMatch(/creator/);
+  });
+
+  it("leaves someone who wrote to the AI's nudges, so they never get both at once", async () => {
+    mockNudgesRunning.mockResolvedValue(true);
+    expect(await followUpBlockedReason("auto_a", "acct_1", "fan_1")).toMatch(/nudges/);
+    expect(mockNudgesRunning).toHaveBeenCalledWith("acct_1", "fan_1");
   });
 
   it("skips people who already joined or said no", async () => {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db/client";
+import { nudgesRunningFor } from "@/lib/ai/nudges";
 import { isAiPaused, isConversationEnded } from "@/lib/ai/takeover";
 import { FOLLOWUP_JOB_NAME, getDMQueue } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
@@ -119,8 +120,8 @@ const STOP_INTENTS = ["already_joined", "declined"];
 /**
  * Why a due follow-up should not go out, or null to send it: the AI test run
  * is limited to other usernames, the creator took the conversation over, the
- * conversation was ended, they already opened the campaign's link, or they
- * already joined or said no.
+ * conversation was ended, the AI's nudges are following up with them, they
+ * already opened the campaign's link, or they already joined or said no.
  */
 export async function followUpBlockedReason(
   automationId: string,
@@ -146,6 +147,9 @@ export async function followUpBlockedReason(
   }
   if (await isConversationEnded(instagramAccountId, userId).catch(() => false)) {
     return "the conversation was ended";
+  }
+  if (await nudgesRunningFor(instagramAccountId, userId).catch(() => false)) {
+    return "the AI's nudges are following up";
   }
   // Like ManyChat's follow-up: it reminds people who have not opened the link yet.
   const clicked = await prisma.linkClick.findFirst({

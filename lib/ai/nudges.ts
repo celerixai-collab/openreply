@@ -52,6 +52,11 @@ export async function setNudgeSettings(accountId: string, settings: NudgeSetting
   });
 }
 
+/** They wrote and the nudges are following up with them. */
+export async function nudgesRunningFor(accountId: string, igsid: string): Promise<boolean> {
+  return Boolean(await getRedisConnection().exists(quietSinceKey(accountId, igsid)));
+}
+
 /** The nudge times after a message at `since`: every interval, inside the window. */
 export function nudgeDelays(intervalHours: number, count: number): number[] {
   const step = intervalHours * 60 * 60 * 1000;
